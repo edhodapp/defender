@@ -40,7 +40,7 @@ $(BUILD)/%.elf: $(BUILD)/%.o
 
 # Multi-file targets pull in the oled library, graphics primitives, and input.
 $(BUILD)/oled.elf:     $(BUILD)/oled_lib.o
-$(BUILD)/defender.elf: $(BUILD)/oled_lib.o $(BUILD)/gfx.o $(BUILD)/input.o
+$(BUILD)/defender.elf: $(BUILD)/oled_lib.o $(BUILD)/gfx.o $(BUILD)/input.o $(BUILD)/audio.o
 
 $(BUILD)/%.hex: $(BUILD)/%.elf
 	$(OBJCOPY) -O ihex -R .eeprom $< $@

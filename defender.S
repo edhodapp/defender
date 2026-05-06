@@ -84,6 +84,7 @@ _reset:
 
     rcall oled_init
     rcall input_init
+    rcall audio_init
 
     ldi   r24, 28
     sts   sprite_y, r24
@@ -145,6 +146,9 @@ main_loop:
     lds   r25, frame_counter
     inc   r25
     sts   frame_counter, r25
+
+    ; Advance any active SFX by one frame
+    rcall audio_tick
 
     ; Periodic Lander spawn: every 32 frames, except at counter=0 (wrap)
     cpi   r25, 0
@@ -271,9 +275,11 @@ spawn_x_left:
     ldi   r25, 59
 spawn_store_x:
     std   Y+1, r25
-    ; Successful spawn — reload cooldown
+    ; Successful spawn — reload cooldown and trigger fire SFX
     ldi   r25, FIRE_COOLDOWN_RELOAD
     sts   fire_cooldown, r25
+    ldi   r24, 1                          ; SFX_FIRE
+    rcall audio_play
 no_b_press:
 
     ; --- Update game entities (Landers, etc.) ---
@@ -284,6 +290,15 @@ no_b_press:
 
     ; --- Ship vs. enemy collision (player death) ---
     rcall ship_collision_check
+
+    ; --- Drain any deferred SFX queued from inner collision loops ---
+    lds   r24, pending_sfx
+    cpi   r24, 0
+    breq  no_pending_sfx
+    rcall audio_play
+    clr   r24
+    sts   pending_sfx, r24
+no_pending_sfx:
 
     ; --- Render this frame ---
     rcall clear_fb
@@ -716,7 +731,7 @@ cc_ent_loop:
     subi  r27, -8
     cp    r17, r27
     brsh  cc_ent_next
-    ; HIT — deactivate Lander, then unwind and deactivate beam
+    ; HIT — deactivate Lander, deactivate beam, queue SFX_HIT for main_loop.
     clr   r25
     st    Y, r25
     pop   r18
@@ -724,6 +739,8 @@ cc_ent_loop:
     pop   r28
     clr   r25
     st    Y, r25
+    ldi   r25, 2                          ; SFX_HIT
+    sts   pending_sfx, r25
     rjmp  cc_proj_next
 cc_ent_next:
     adiw  r28, ENTITY_SIZE
@@ -746,6 +763,13 @@ cc_proj_next:
 ; Clobbers: r17, r18, r24, r25, r26, r27, Y
 ; ============================================================================
 ship_collision_check:
+    ; Skip while we're already dying — death_flash counts the death animation
+    ; down; re-arming each frame would freeze the SFX at sound_frame=0.
+    lds   r24, death_flash
+    cpi   r24, 0
+    breq  sc_alive
+    ret
+sc_alive:
     lds   r17, sprite_y
     ldi   r28, lo8(entities)
     ldi   r29, hi8(entities)
@@ -781,11 +805,13 @@ sc_loop:
 sc_check:
     cpi   r26, 8
     brsh  sc_next
-    ; HIT — reset ship, arm flash, return early
+    ; HIT — reset ship, arm flash, queue SFX_DEATH; main_loop drains after.
     ldi   r25, 28
     sts   sprite_y, r25
     ldi   r25, 8
     sts   death_flash, r25
+    ldi   r25, 3                          ; SFX_DEATH (overrides any pending HIT)
+    sts   pending_sfx, r25
     ret
 sc_next:
     adiw  r28, ENTITY_SIZE

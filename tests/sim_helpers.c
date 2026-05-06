@@ -82,6 +82,8 @@ sim_t *sim_boot(const char *elf_path) {
     s->sym_death_flash    = sim_lookup(s, "death_flash");
     s->sym_spawn_pos_idx  = sim_lookup(s, "spawn_pos_idx");
     s->sym_fire_cooldown  = sim_lookup(s, "fire_cooldown");
+    s->sym_sound_id       = sim_lookup(s, "sound_id");
+    s->sym_sound_frame    = sim_lookup(s, "sound_frame");
     s->sym_projectiles    = sim_lookup(s, "projectiles");
     s->sym_entities       = sim_lookup(s, "entities");
     s->sym_framebuffer    = sim_lookup(s, "framebuffer");
@@ -177,6 +179,8 @@ void sim_clear_state_minimal(sim_t *s) {
     sim_mem_w(s, s->sym_death_flash, 0);
     sim_mem_w(s, s->sym_spawn_pos_idx, 0);
     sim_mem_w(s, s->sym_fire_cooldown, 0);
+    sim_mem_w(s, s->sym_sound_id, 0);
+    sim_mem_w(s, s->sym_sound_frame, 0);
 }
 
 void sim_set_ship(sim_t *s, int sprite_y, int scroll, int facing) {

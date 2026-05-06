@@ -26,6 +26,8 @@ typedef struct {
     uint16_t sym_death_flash;
     uint16_t sym_spawn_pos_idx;
     uint16_t sym_fire_cooldown;
+    uint16_t sym_sound_id;
+    uint16_t sym_sound_frame;
     uint16_t sym_projectiles;
     uint16_t sym_entities;
     uint16_t sym_framebuffer;
