@@ -150,7 +150,11 @@ main_loop:
     ; Advance any active SFX by one frame
     rcall audio_tick
 
-    ; Periodic Lander spawn: every 32 frames, except at counter=0 (wrap)
+    ; Periodic Lander spawn: every 32 frames, except at counter=0 (wrap).
+    ; Reload r25 — audio_tick clobbers it; using the stale value here used
+    ; to gate spawn on sound_frame instead of frame_counter, which silently
+    ; suppressed Lander spawning while a sound was playing.
+    lds   r25, frame_counter
     cpi   r25, 0
     breq  no_spawn_check
     mov   r24, r25
