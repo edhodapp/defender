@@ -38,8 +38,9 @@ fire_cooldown:  .skip 1                  ; auto-fire throttle; reloads to FIRE_C
 ;           bits 0-5 = y (0..63 screen rows)
 .equ ENTITY_SLOTS, 64
 .equ ENTITY_SIZE,  3
-.equ TYPE_NONE,    0
-.equ TYPE_LANDER,  1
+.equ TYPE_NONE,     0
+.equ TYPE_LANDER,   1
+.equ TYPE_HUMANOID, 7                    ; matches dispatch slot 7
 .global entities
 entities:       .skip ENTITY_SLOTS * ENTITY_SIZE
 
@@ -116,6 +117,21 @@ _reset:
     sts   entities + 1, r24                ; world_x
     ldi   r24, 10
     sts   entities + 2, r24                ; y (state2 = 0)
+
+    ; Spawn 8 Humanoids on the ground (slots 1..8) at world_x = 16, 48, 80, ...
+    ldi   r28, lo8(entities + 1*ENTITY_SIZE)
+    ldi   r29, hi8(entities + 1*ENTITY_SIZE)
+    ldi   r25, 16                          ; world_x seed
+    ldi   r24, 8                           ; count
+hum_init_loop:
+    ldi   r26, (1<<7) | (TYPE_HUMANOID<<4)
+    st    Y+, r26
+    st    Y+, r25                          ; world_x
+    ldi   r26, 48                          ; y (page 6, just above mountains)
+    st    Y+, r26
+    subi  r25, -32                         ; world_x += 32 (mod 256 wraps)
+    dec   r24
+    brne  hum_init_loop
 
     ; --- Timer1: CTC, prescaler 64, OCR1A=4165 → 16e6/64/4166 = 59.99 Hz ---
     ; Compare-A interrupt fires every ~16.67 ms; main_loop sleeps on it.
@@ -948,12 +964,12 @@ re_next:
 render_dispatch:
     rjmp  render_noop
     rjmp  render_lander
-    rjmp  render_noop
-    rjmp  render_noop
-    rjmp  render_noop
-    rjmp  render_noop
-    rjmp  render_noop
-    rjmp  render_noop
+    rjmp  render_noop                    ; type 2 = (Mutant)  — Phase 3
+    rjmp  render_noop                    ; type 3 = (Bomber)
+    rjmp  render_noop                    ; type 4 = (Pod)
+    rjmp  render_noop                    ; type 5 = (Swarmer)
+    rjmp  render_noop                    ; type 6 = (Baiter)  — Phase 4
+    rjmp  render_humanoid                ; type 7 = Humanoid
 
 render_noop:
     ret
@@ -978,6 +994,26 @@ render_lander:
 rl_offscreen:
     ret
 
+; render_humanoid: convert world_x → screen_x; if visible, blit humanoid.
+; Same wrapping discipline as render_lander.
+render_humanoid:
+    ldd   r20, Y+1
+    lds   r19, scroll_offset
+    sub   r20, r19
+    sbrc  r20, 7
+    rjmp  rh_offscreen
+    cpi   r20, 121
+    brsh  rh_offscreen
+    ldd   r21, Y+2
+    andi  r21, 0x3F
+    mov   r16, r20
+    mov   r17, r21
+    ldi   r30, lo8(humanoid_sprite)
+    ldi   r31, hi8(humanoid_sprite)
+    rcall blit_8x8
+rh_offscreen:
+    ret
+
 ; Lander sprite — 8x8, simple bug-like shape, framebuffer-column order.
 ; Visual layout:
 ;     ........
@@ -990,6 +1026,20 @@ rl_offscreen:
 ;     ........
 lander_sprite:
     .byte 0x18, 0x3C, 0x7E, 0x7E, 0x7E, 0x7E, 0x3C, 0x18
+    .balign 2
+
+; humanoid_sprite — 8×8 stick figure (head, arms out, body, legs splay).
+; Visual:
+;     ..XXXX..   row 0
+;     ..XXXX..   row 1   (head)
+;     ...XX...   row 2   (neck)
+;     .XXXXXX.   row 3   (arms)
+;     ...XX...   row 4   (body)
+;     ...XX...   row 5
+;     ..X..X..   row 6   (legs apart)
+;     .XX..XX.   row 7   (feet)
+humanoid_sprite:
+    .byte 0x00, 0x88, 0xCB, 0x3F, 0x3F, 0xCB, 0x88, 0x00
     .balign 2
 
 ; ============================================================================

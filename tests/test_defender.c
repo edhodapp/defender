@@ -26,6 +26,13 @@
 static const uint8_t ship_right[8]    = { 0x18, 0x3C, 0x3C, 0x38, 0x30, 0x30, 0x10, 0x10 };
 static const uint8_t ship_left[8]     = { 0x10, 0x10, 0x30, 0x30, 0x38, 0x3C, 0x3C, 0x18 };
 static const uint8_t lander_sprite[8] = { 0x18, 0x3C, 0x7E, 0x7E, 0x7E, 0x7E, 0x3C, 0x18 };
+static const uint8_t humanoid_sprite[8] = { 0x00, 0x88, 0xCB, 0x3F, 0x3F, 0xCB, 0x88, 0x00 };
+
+// Humanoids are spawned at fixed world_x in entity slots 1..8 by _reset.
+// y = 48 (top of page 6, just above mountain row).
+static const uint8_t humanoid_world_x[8] = { 16, 48, 80, 112, 144, 176, 208, 240 };
+#define HUMANOID_Y 48
+#define HUMANOID_SCREEN_LIMIT 121               // matches render_humanoid's `cpi 121, brsh off`
 
 // Must match defender.S height_table (256 bytes; hash period 256).
 static const uint8_t height_table[256] = {
@@ -93,8 +100,17 @@ static uint8_t expected_radar_byte(int fb_col, uint8_t scroll, int sprite_y,
     return b;
 }
 
+// Compute the on-screen x for each humanoid given the current scroll.
+// Returns -1 for off-screen (matches firmware: MSB-set or screen_x >= 121).
+static int humanoid_screen_x(int idx, uint8_t scroll) {
+    int sx = (humanoid_world_x[idx] - (int)scroll) & 0xFF;
+    if (sx & 0x80) return -1;
+    if (sx >= HUMANOID_SCREEN_LIMIT) return -1;
+    return sx;
+}
+
 // Verify sprite footprint, horizon, radar, optional projectile beam,
-// optional lander, and stray pixels in pages 1-6.
+// optional lander, the 8 humanoids on the ground, and stray pixels in pages 1-6.
 static int verify_frame(const ssd1306_t *d, int sx, int sy,
                         const uint8_t *sprite, uint8_t scroll,
                         int proj_spawn_x, int proj_x, int proj_y,
@@ -102,6 +118,11 @@ static int verify_frame(const ssd1306_t *d, int sx, int sy,
                         const char *tag) {
     int rc = 0;
     int sprite_bad = 0, horizon_bad = 0, radar_bad = 0, lander_bad = 0, stray = 0;
+    int humanoid_bad = 0;
+
+    // Cache humanoid screen positions for both verify-pass and stray-mask use.
+    int hum_sx[8];
+    for (int i = 0; i < 8; i++) hum_sx[i] = humanoid_screen_x(i, scroll);
 
     // Sprite box
     for (int row = 0; row < 8; row++) {
@@ -177,7 +198,25 @@ static int verify_frame(const ssd1306_t *d, int sx, int sy,
         }
     }
 
-    // Stray pixels in pages 1-6, excluding sprite box, beam, and lander box.
+    // Humanoids (each visible one verifies pixel-perfect)
+    for (int i = 0; i < 8; i++) {
+        if (hum_sx[i] < 0) continue;
+        for (int row = 0; row < 8; row++) {
+            for (int col = 0; col < 8; col++) {
+                int x = hum_sx[i] + col, y = HUMANOID_Y + row;
+                int want = (humanoid_sprite[col] >> row) & 1;
+                int got  = ssd1306_pixel(d, x, y);
+                if (got != want) {
+                    if (humanoid_bad == 0)
+                        fprintf(stderr, "%s: first humanoid[%d] mismatch at (%d,%d) got=%d want=%d\n",
+                                tag, i, x, y, got, want);
+                    humanoid_bad++;
+                }
+            }
+        }
+    }
+
+    // Stray pixels in pages 1-6, excluding sprite box, beam, lander, and humanoid boxes.
     for (int y = 8; y < 56; y++) {
         for (int x = 0; x < SSD1306_WIDTH; x++) {
             int in_sprite = (x >= sx && x < sx+8 && y >= sy && y < sy+8);
@@ -185,7 +224,15 @@ static int verify_frame(const ssd1306_t *d, int sx, int sy,
                              x >= beam_lo && x <= beam_hi);
             int in_lander = (lander_x >= 0 && x >= lander_x && x < lander_x+8 &&
                              y >= lander_y && y < lander_y+8);
-            if (!in_sprite && !is_beam && !in_lander && ssd1306_pixel(d, x, y)) {
+            int in_humanoid = 0;
+            if (y >= HUMANOID_Y && y < HUMANOID_Y + 8) {
+                for (int i = 0; i < 8; i++) {
+                    if (hum_sx[i] >= 0 && x >= hum_sx[i] && x < hum_sx[i] + 8) {
+                        in_humanoid = 1; break;
+                    }
+                }
+            }
+            if (!in_sprite && !is_beam && !in_lander && !in_humanoid && ssd1306_pixel(d, x, y)) {
                 if (stray == 0)
                     fprintf(stderr, "%s: first stray lit pixel at (%d,%d)\n", tag, x, y);
                 stray++;
@@ -193,12 +240,13 @@ static int verify_frame(const ssd1306_t *d, int sx, int sy,
         }
     }
 
-    if (sprite_bad)  { rc = 1; fprintf(stderr, "%s: %d sprite mismatches\n", tag, sprite_bad); }
-    if (horizon_bad) { rc = 1; fprintf(stderr, "%s: %d horizon mismatches\n", tag, horizon_bad); }
-    if (radar_bad)   { rc = 1; fprintf(stderr, "%s: %d radar mismatches\n", tag, radar_bad); }
-    if (lander_bad)  { rc = 1; fprintf(stderr, "%s: %d lander mismatches\n", tag, lander_bad); }
-    if (proj_bad)    { rc = 1; }
-    if (stray)       { rc = 1; fprintf(stderr, "%s: %d stray pixels\n", tag, stray); }
+    if (sprite_bad)   { rc = 1; fprintf(stderr, "%s: %d sprite mismatches\n", tag, sprite_bad); }
+    if (horizon_bad)  { rc = 1; fprintf(stderr, "%s: %d horizon mismatches\n", tag, horizon_bad); }
+    if (radar_bad)    { rc = 1; fprintf(stderr, "%s: %d radar mismatches\n", tag, radar_bad); }
+    if (lander_bad)   { rc = 1; fprintf(stderr, "%s: %d lander mismatches\n", tag, lander_bad); }
+    if (humanoid_bad) { rc = 1; fprintf(stderr, "%s: %d humanoid mismatches\n", tag, humanoid_bad); }
+    if (proj_bad)     { rc = 1; }
+    if (stray)        { rc = 1; fprintf(stderr, "%s: %d stray pixels\n", tag, stray); }
     return rc;
 }
 

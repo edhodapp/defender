@@ -20,7 +20,7 @@ all: $(BUILD)/test_blinky $(BUILD)/test_ssd1306 $(BUILD)/test_oled $(BUILD)/test
      $(BUILD)/test_collision $(BUILD)/test_proj_motion $(BUILD)/test_input \
      $(BUILD)/test_lander_drift $(BUILD)/test_proj_spawn $(BUILD)/test_ship_collision \
      $(BUILD)/test_lander_spawn $(BUILD)/test_bug_repros $(BUILD)/test_frame_rate \
-     $(BUILD)/test_audio
+     $(BUILD)/test_audio $(BUILD)/test_humanoids
 
 $(BUILD):
 	mkdir -p $@
@@ -64,6 +64,9 @@ $(BUILD)/test_frame_rate: test_frame_rate.c sim_helpers.c sim_helpers.h | $(BUIL
 
 $(BUILD)/test_audio: test_audio.c sim_helpers.c sim_helpers.h | $(BUILD)
 	$(CC) $(CFLAGS) test_audio.c sim_helpers.c $(LDFLAGS) $(LIBS) -o $@
+
+$(BUILD)/test_humanoids: test_humanoids.c sim_helpers.c sim_helpers.h | $(BUILD)
+	$(CC) $(CFLAGS) test_humanoids.c sim_helpers.c $(LDFLAGS) $(LIBS) -o $@
 
 $(BUILD)/profile: profile.c sim_helpers.c sim_helpers.h | $(BUILD)
 	$(CC) $(CFLAGS) profile.c sim_helpers.c $(LDFLAGS) $(LIBS) -o $@
@@ -110,6 +113,8 @@ test: all
 	$(BUILD)/test_frame_rate ../build/defender.elf || fail=1; \
 	echo ">>> $(BUILD)/test_audio"; \
 	$(BUILD)/test_audio ../build/defender.elf || fail=1; \
+	echo ">>> $(BUILD)/test_humanoids"; \
+	$(BUILD)/test_humanoids ../build/defender.elf || fail=1; \
 	if [ $$fail -ne 0 ]; then echo "TESTS FAILED"; exit 1; fi; \
 	echo "ALL TESTS PASSED"
 
