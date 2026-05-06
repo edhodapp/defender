@@ -1,0 +1,28 @@
+defender
+Copyright (C) 2026 Ed Hodapp <ed@hodapp.com>
+
+SPDX-License-Identifier: MIT
+
+defender is free software: you may use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of it under the terms of the
+MIT License (a.k.a. the Expat License). Permission is granted without
+restriction subject to the conditions stated in `LICENSE`.
+
+defender is provided "AS IS", WITHOUT WARRANTY OF ANY KIND, express or
+implied, including but not limited to the warranties of merchantability,
+fitness for a particular purpose, and noninfringement. See `LICENSE` for
+the full warranty disclaimer.
+
+The full license text is in `LICENSE`.
+
+
+No external contributions accepted
+----------------------------------
+
+Ed Hodapp is the sole author and sole copyright holder of defender.
+External contributions (pull requests, patches, and similar upstream
+submissions) are **not accepted** at this time. Consolidated copyright
+ownership preserves future licensing flexibility — Ed retains the right
+to relicense, dual-license, or open to contributions under a CLA later.
+Accepting external contributions under MIT now would dilute that option
+because the resulting work would no longer be solely owned.
