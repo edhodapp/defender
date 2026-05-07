@@ -92,21 +92,27 @@ static void test_grab_after_full_pause(void) {
                   "pause counter should be cleared after grab");
 }
 
-// ---- 4. Misaligned Lander descends past y=40 to y=47 with no grab ----
-static void test_no_grab_when_misaligned(void) {
+// ---- 4. With seek added (Phase 2.5b): a misaligned Lander hunts the
+//        humanoid horizontally and freezes at y=40 until aligned, instead
+//        of descending past it and parking at y=47. ----
+static void test_misaligned_lander_hunts(void) {
     scenario_only();
     place_humanoid(1, 80);
-    place_lander(0, 200, 30);                    // far from any humanoid
-    // Run long enough for it to descend all the way past 40 to 47 and sit.
+    place_lander(0, 200, 30);
+    // 100 frames = 25 drift events. Initial gap is 120 cols (going LEFT) —
+    // not enough drift events to fully align (only 25 cols of x progress).
+    // After 100 frames the lander should still be in flight, parked at y=40.
     for (int i = 0; i < 100; i++) sim_run_frame(S);
     SIM_CHECK_MSG(sim_lander_active(S, 1),
-                  "humanoid should still be alive (misaligned lander)");
+                  "humanoid should still be alive while lander is en route");
     SIM_CHECK_MSG(!sim_lander_carrying(S, 0),
-                  "lander shouldn't be carrying; byte0=0x%02X",
+                  "lander shouldn't be carrying yet; byte0=0x%02X",
                   sim_mem_r(S, S->sym_entities + 0));
-    SIM_CHECK_MSG(sim_lander_y(S, 0) == 47,
-                  "misaligned lander should pin at y=47; got y=%d",
+    SIM_CHECK_MSG(sim_lander_y(S, 0) == 40,
+                  "lander should freeze at grab altitude while hunting; got y=%d",
                   sim_lander_y(S, 0));
+    SIM_CHECK_MSG(sim_lander_world_x(S, 0) < 200,
+                  "lander should have advanced LEFT toward humanoid");
 }
 
 // ---- 5. Carrying Lander ascends ----
@@ -179,7 +185,7 @@ int main(int argc, char **argv) {
     test_descend_halts_on_humanoid_head();
     test_pause_counter_ticks_down();
     test_grab_after_full_pause();
-    test_no_grab_when_misaligned();
+    test_misaligned_lander_hunts();
     test_carrying_lander_ascends();
     test_carrying_lander_pins_below_radar();
     test_sfx_grab_queued_at_grab_moment();

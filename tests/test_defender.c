@@ -292,49 +292,55 @@ int main(int argc, char **argv) {
     if (run_until_data(avr, &display, 1024) == cpu_Crashed) {
         fprintf(stderr, "FAIL: cpu_Crashed before frame 1\n"); return 1;
     }
-    // Lander spawns at world_x=100, y=10. Drifts 1 row every 4 frames.
-    // y(N) = 10 + N/4.   screen_x(N) = 100 - scroll.
+    // Lander spawns at world_x=100, y=10. Drifts 1 row every 4 frames AND
+    // seeks 1 col toward the closest humanoid (at world_x=112) per drift,
+    // so world_x advances by 1 per drift event too.
     rc |= verify_frame(&display, 60, 28, ship_right, 0,  -1, -1, -1, 100, 10, "idle");
 
     // Phase 2: 3x RIGHT. x locked, scroll=3, facing still right.
+    // 1 drift fired (fc=4): world_x=101, y=11. screen_x=101-3=98.
     press(right);
     run_until_data(avr, &display, 4 * 1024);
     release(right);
-    rc |= verify_frame(&display, 60, 28, ship_right, 3,  -1, -1, -1,  97, 11, "after right");
+    rc |= verify_frame(&display, 60, 28, ship_right, 3,  -1, -1, -1,  98, 11, "after right");
 
     // Phase 3: 3x UP. y=25, scroll unchanged at 3, facing unchanged.
+    // No new drift in this window. Lander unchanged: world_x=101, y=11.
     press(up);
     run_until_data(avr, &display, 7 * 1024);
     release(up);
-    rc |= verify_frame(&display, 60, 25, ship_right, 3,  -1, -1, -1,  97, 11, "after up");
+    rc |= verify_frame(&display, 60, 25, ship_right, 3,  -1, -1, -1,  98, 11, "after up");
 
     // Phase 4: 3x LEFT. scroll back to 0, facing flips to left.
+    // 1 more drift (fc=8): world_x=102, y=12. screen_x=102.
     press(left);
     run_until_data(avr, &display, 10 * 1024);
     release(left);
-    rc |= verify_frame(&display, 60, 25, ship_left, 0,  -1, -1, -1, 100, 12, "after left");
+    rc |= verify_frame(&display, 60, 25, ship_left, 0,  -1, -1, -1, 102, 12, "after left");
 
     // Phase 5: 3x DOWN. y=28, scroll unchanged at 0, facing unchanged.
+    // 1 more drift (fc=12): world_x=103, y=13. screen_x=103.
     press(down);
     run_until_data(avr, &display, 13 * 1024);
     release(down);
-    rc |= verify_frame(&display, 60, 28, ship_left, 0,  -1, -1, -1, 100, 13, "after down");
+    rc |= verify_frame(&display, 60, 28, ship_left, 0,  -1, -1, -1, 103, 13, "after down");
 
-    // Phase 6: flip back to facing right (1x RIGHT), then fire B.
+    // Phase 6: flip back to facing right (1x RIGHT), scroll=1; no drift.
     press(right);
     run_until_data(avr, &display, 14 * 1024);
     release(right);
 
     // Phase 7: press B for one frame; projectile spawns at fb col 68.
-    // At spawn frame, beam is just one pixel since spawn_x == proj_x.
+    // No drift in the window: lander still world_x=103, y=13. screen_x=103-1=102.
     press(b_btn);
     run_until_data(avr, &display, 15 * 1024);
     release(b_btn);
-    rc |= verify_frame(&display, 60, 28, ship_right, 1,  68, 68, 32,  99, 13, "after fire B");
+    rc |= verify_frame(&display, 60, 28, ship_right, 1,  68, 68, 32, 102, 13, "after fire B");
 
     // Phase 8: 3 more frames; proj_x = 68 + 4*3 = 80, beam from 68 to 80.
+    // 1 more drift (fc=16): world_x=104, y=14. screen_x=104-1=103.
     run_until_data(avr, &display, 18 * 1024);
-    rc |= verify_frame(&display, 60, 28, ship_right, 1,  68, 80, 32,  99, 14, "projectile in flight");
+    rc |= verify_frame(&display, 60, 28, ship_right, 1,  68, 80, 32, 103, 14, "projectile in flight");
 
     printf("defender: cycles=%llu data=%u (after frame 18)\n",
            (unsigned long long)avr->cycle, display.data_count);

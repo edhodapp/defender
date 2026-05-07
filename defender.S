@@ -166,15 +166,14 @@ main_loop:
     ; Advance any active SFX by one frame
     rcall audio_tick
 
-    ; Periodic Lander spawn: every 32 frames, except at counter=0 (wrap).
-    ; Reload r25 — audio_tick clobbers it; using the stale value here used
-    ; to gate spawn on sound_frame instead of frame_counter, which silently
-    ; suppressed Lander spawning while a sound was playing.
+    ; Periodic Lander spawn: once per 256-frame counter cycle, fired at
+    ; frame_counter == 128. ~4.3 s at 60 Hz — longer than a worst-case
+    ; humanoid fall (160 frames from y=8 to y=48), so a freed humanoid
+    ; reaches the ground before the next Lander appears.
+    ;
+    ; Reload r25 — audio_tick clobbers it.
     lds   r25, frame_counter
-    cpi   r25, 0
-    breq  no_spawn_check
-    mov   r24, r25
-    andi  r24, 0x1F
+    cpi   r25, 128
     brne  no_spawn_check
     rcall try_spawn_lander
 no_spawn_check:
@@ -988,18 +987,27 @@ update_lander:
     andi  r25, 0x0E                      ; pause counter
     brne  ul_pausing
 
-    ; Idle — descend if drift frame, then look for a humanoid below.
+    ; Idle — drift frame: hunt + conditional descend.
     lds   r25, frame_counter
     andi  r25, 0x03
     brne  ul_check_align
+    ; Step 1: horizontal seek toward nearest grounded humanoid.
+    ; Returns r24 = 1 if any active grounded humanoid exists, else 0.
+    rcall ul_seek_humanoid_x
+    ; Step 2: vertical descent, gated by altitude and humanoid presence.
     ldd   r25, Y+2
-    mov   r24, r25
-    andi  r24, 0xC0                      ; preserve state2
+    mov   r26, r25
+    andi  r26, 0xC0                      ; preserve state2
     andi  r25, 0x3F
     cpi   r25, 47
-    brsh  ul_check_align                 ; at bottom — no further descent
+    brsh  ul_check_align                 ; clamped at world bottom
+    cpi   r25, 40
+    brlo  ul_do_descend                  ; below grab altitude — always descend
+    cpi   r24, 0
+    brne  ul_check_align                 ; humanoid alive → freeze at 40..46
+ul_do_descend:
     inc   r25
-    or    r25, r24
+    or    r25, r26
     std   Y+2, r25
 ul_check_align:
     ; If exactly at y == 40 and an active humanoid is x-aligned (|dx| < 8),
@@ -1082,6 +1090,73 @@ uha_next:
     pop   r18
     pop   r29
     pop   r28
+    ldi   r24, 0
+    ret
+
+; ul_seek_humanoid_x: scan entity slots for active GROUNDED humanoids
+; (TYPE_HUMANOID, byte 0 bit 0 = 0); find the closest one (signed-delta,
+; wrap-aware) and move the lander's world_x by 1 col toward it. No-op when
+; no candidates exist.
+;
+; Returns r24 = 1 if any candidate was found, else r24 = 0. The caller uses
+; this flag to gate descent at the grab-altitude band (40..46): freeze if a
+; humanoid is alive somewhere, descend through if not.
+;
+; Y on entry points at the lander's slot byte 0; preserved on return.
+ul_seek_humanoid_x:
+    ldd   r24, Y+1                       ; lander world_x
+    push  r28
+    push  r29
+    push  r18
+    ldi   r28, lo8(entities)
+    ldi   r29, hi8(entities)
+    ldi   r18, ENTITY_SLOTS
+    ldi   r25, 0xFF                      ; min |delta| sentinel
+    ldi   r26, 0                         ; best-target world_x
+ush_loop:
+    ld    r19, Y
+    sbrs  r19, 7
+    rjmp  ush_next                       ; inactive slot
+    sbrc  r19, 0
+    rjmp  ush_next                       ; falling humanoid / carrying lander — skip
+    mov   r20, r19
+    swap  r20
+    andi  r20, 0x07
+    cpi   r20, TYPE_HUMANOID
+    brne  ush_next
+    ldd   r20, Y+1
+    sub   r20, r24
+    sbrc  r20, 7
+    neg   r20                            ; r20 = |signed delta| (shorter wrap)
+    cp    r20, r25
+    brsh  ush_next                       ; not closer than current best
+    mov   r25, r20
+    ldd   r26, Y+1
+ush_next:
+    adiw  r28, ENTITY_SIZE
+    dec   r18
+    brne  ush_loop
+    pop   r18
+    pop   r29
+    pop   r28
+    cpi   r25, 0xFF
+    breq  ush_no_target
+    cpi   r25, 0
+    breq  ush_aligned                    ; already aligned — no movement
+    ; Move world_x by 1 toward target (sign of (target - lander) → direction)
+    sub   r26, r24
+    sbrc  r26, 7
+    rjmp  ush_left
+    inc   r24
+    rjmp  ush_store
+ush_left:
+    dec   r24
+ush_store:
+    std   Y+1, r24
+ush_aligned:
+    ldi   r24, 1
+    ret
+ush_no_target:
     ldi   r24, 0
     ret
 

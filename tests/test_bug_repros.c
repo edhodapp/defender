@@ -230,27 +230,22 @@ static void test_rapid_fire_doesnt_double_kill(void) {
                   "beam 1 should still be in flight");
 }
 
-// Regression: the periodic Lander spawn gate is `(frame_counter & 0x1F) == 0`,
-// but `audio_tick` clobbers r25 — and main_loop reused r25 across the call
-// instead of reloading frame_counter. With B held the FIRE SFX plays
-// continuously, leaving r25 = sound_frame+1 (rarely 0 mod 32), so the
-// `breq/brne no_spawn_check` gate effectively suppresses spawning.
-//
-// Repro: arm a frame so the next iteration would spawn (frame_counter=31),
-// install an active SFX so audio_tick will clobber r25, run one frame.
-// On the buggy firmware, no Lander is spawned in the swept slots.
+// Regression: main_loop's spawn gate must reload frame_counter from memory
+// because audio_tick clobbers r25. The spawn trigger has since changed
+// from "(frame_counter & 0x1F) == 0" to "frame_counter == 128", but the
+// register-lifetime hazard is the same — if r25 isn't reloaded, the
+// comparison sees the SFX state machine's sound_frame instead and the
+// spawn is suppressed.
 static void test_lander_spawn_not_blocked_by_active_sfx(void) {
     sim_sync(S);
     sim_clear_state_minimal(S);
     sim_set_ship(S, 28, 0, 0);
-    // Force the spawn-trigger frame (next iter: fc -> 32 -> spawn fires).
-    sim_mem_w(S, S->sym_frame_counter, 31);
+    // Force the spawn-trigger frame (next iter: fc -> 128 -> spawn fires).
+    sim_mem_w(S, S->sym_frame_counter, 127);
     // Pretend SFX_FIRE is active; audio_tick will advance it and clobber r25.
-    sim_mem_w(S, S->sym_sound_id, 1);          // SFX_FIRE
+    sim_mem_w(S, S->sym_sound_id, 1);
     sim_mem_w(S, S->sym_sound_frame, 0);
     sim_run_frame(S);
-    // Slot 0 should now hold a freshly-spawned Lander (the spawner picks
-    // the first inactive slot scanning from 0).
     SIM_CHECK_MSG(sim_lander_active(S, 0),
                   "BUG: Lander spawn was suppressed because audio_tick "
                   "clobbered r25 between increment and spawn-gate check");
