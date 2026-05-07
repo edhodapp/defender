@@ -976,8 +976,8 @@ ul_carrying:
     mov   r24, r25
     andi  r24, 0xC0
     andi  r25, 0x3F
-    cpi   r25, 0
-    breq  ul_done                        ; pinned at top
+    cpi   r25, 9
+    brlo  ul_done                        ; y <= 8 → pinned below radar bar
     dec   r25
     or    r25, r24
     std   Y+2, r25

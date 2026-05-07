@@ -125,15 +125,17 @@ static void test_carrying_lander_ascends(void) {
                   y0, y1);
 }
 
-// ---- 6. Carrying Lander pins at y=0 ----
-static void test_carrying_lander_pins_at_top(void) {
+// ---- 6. Carrying Lander pins at y=8 (just below the radar bar) ----
+static void test_carrying_lander_pins_below_radar(void) {
     scenario_only();
     place_humanoid(1, 80);
     place_lander(0, 80, 39);
-    // Long run to grab (~36) + ascend from y=40 to y=0 (40 × 4 = 160) + buffer.
+    // ~36 frames to grab + ascend from y=40 to y=8 (32 rows × 4 = 128 frames)
+    // + buffer.
     for (int i = 0; i < 240; i++) sim_run_frame(S);
-    SIM_CHECK_MSG(sim_lander_y(S, 0) == 0,
-                  "expected lander pinned at top; got y=%d", sim_lander_y(S, 0));
+    SIM_CHECK_MSG(sim_lander_y(S, 0) == 8,
+                  "expected lander pinned at y=8 (just below radar); got y=%d",
+                  sim_lander_y(S, 0));
     SIM_CHECK(sim_lander_carrying(S, 0));
 }
 
@@ -179,7 +181,7 @@ int main(int argc, char **argv) {
     test_grab_after_full_pause();
     test_no_grab_when_misaligned();
     test_carrying_lander_ascends();
-    test_carrying_lander_pins_at_top();
+    test_carrying_lander_pins_below_radar();
     test_sfx_grab_queued_at_grab_moment();
     test_humanoid_killed_during_pause_aborts_grab();
 
