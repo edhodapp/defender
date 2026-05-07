@@ -59,6 +59,10 @@ audio_init:
     sts   _SFR_MEM_ADDR(TCCR3B), r24
     sts   sound_id, r24
     sts   sound_frame, r24
+    ; Enable Timer3 OC3A compare-match interrupt — its ISR toggles PC7 in
+    ; anti-phase with the OC3A hardware toggle on PC6 for BTL audio.
+    ldi   r24, (1<<OCIE3A)
+    sts   _SFR_MEM_ADDR(TIMSK3), r24
     ret
 
 ; ----------------------------------------------------------------------------
@@ -76,6 +80,10 @@ audio_play:
     sts   sound_id, r24
     clr   r25
     sts   sound_frame, r25
+    ; PC7 starts HIGH so it's anti-phase to PC6 (PC6 starts LOW because
+    ; cbi'd in audio_init / when stopping; the first OC3A compare match
+    ; toggles PC6 HIGH and the ISR simultaneously toggles PC7 LOW).
+    sbi   _SFR_IO_ADDR(PORTC), 7
     ; Enable OC3A toggle on compare match, CTC mode, prescaler 8.
     ldi   r25, (1<<COM3A0)
     sts   _SFR_MEM_ADDR(TCCR3A), r25
@@ -120,13 +128,14 @@ audio_tick:
     brne  audio_tick_play
     cpi   r25, 0xFF
     brne  audio_tick_play
-    ; Stop: clear sound_id, sound_frame; halt Timer3; PC6 low.
+    ; Stop: clear sound_id, sound_frame; halt Timer3; both BTL pins low.
     clr   r24
     sts   sound_id, r24
     sts   sound_frame, r24
     sts   _SFR_MEM_ADDR(TCCR3A), r24
     sts   _SFR_MEM_ADDR(TCCR3B), r24
     cbi   _SFR_IO_ADDR(PORTC), 6
+    cbi   _SFR_IO_ADDR(PORTC), 7
     rjmp  audio_tick_done
 audio_tick_play:
     ; Write OCR3A: high byte first (16-bit temp register), then low.

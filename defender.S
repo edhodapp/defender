@@ -29,6 +29,9 @@ spawn_pos_idx:  .skip 1                  ; advances each lander spawn; world_x =
 fire_cooldown:  .skip 1                  ; auto-fire throttle; reloads to FIRE_COOLDOWN_RELOAD after each shot
 .equ FIRE_COOLDOWN_RELOAD, 5             ; shot every (5+1)=6 frames @ 60 Hz = 10 shots/sec
 
+.global frame_ready
+frame_ready:    .skip 1                  ; set by Timer1 ISR; cleared after main_loop sees it
+
 ; 64 entity slots, 3 bytes each. Packed layout:
 ;   byte 0: bit 7   = active
 ;           bits 4-6 = type (0..7)
@@ -58,23 +61,44 @@ entities:       .skip ENTITY_SLOTS * ENTITY_SIZE
 projectiles:    .skip PROJ_SLOTS * PROJ_SIZE
 
 ; --- Vector table ---
-; Each vector slot is 4 bytes (room for one JMP) on >8 KB AVRs. Only RESET
-; and TIMER1_COMPA are used; everything else is uninitialized (=0=nop)
-; because no other interrupt source is enabled.
+; Each vector slot is 4 bytes (room for one JMP) on >8 KB AVRs.
 ;   slot 1  byte 0x00 — RESET
-;   slot 18 byte 0x44 — TIMER1 COMPA  (= main_loop wakeup)
+;   slot 18 byte 0x44 — TIMER1 COMPA (frame-rate cap; sets frame_ready)
+;   slot 33 byte 0x80 — TIMER3 COMPA (BTL audio: toggles PC7 in anti-phase)
 .section .vectors, "ax", @progbits
 .org 0x00
     rjmp _reset                                ; slot 1 (RESET)
 .org 0x44                                      ; (18 - 1) * 4 — slot 18
     rjmp _timer1_compa_isr                     ; TIMER1 COMPA
+.org 0x80                                      ; (33 - 1) * 4 — slot 33
+    rjmp _timer3_compa_isr                     ; TIMER3 COMPA
 
 .section .text, "ax", @progbits
 
-; ISR is a pure wakeup stub — its only purpose is to bring the CPU out of
-; SLEEP_IDLE so main_loop continues for the next frame.
+; Timer1 OC1A interrupt — fires once per frame at 60 Hz. Sets the
+; frame_ready flag; main_loop's sleep loop spins until the flag is set,
+; ignoring (but consuming) any wakes from Timer3's audio interrupt.
 .global _timer1_compa_isr
 _timer1_compa_isr:
+    push  r0
+    in    r0, _SFR_IO_ADDR(SREG)
+    push  r24
+    ldi   r24, 1
+    sts   frame_ready, r24
+    pop   r24
+    out   _SFR_IO_ADDR(SREG), r0
+    pop   r0
+    reti
+
+; Timer3 OC3A interrupt — fires on every compare match. Hardware toggles
+; OC3A on PC6; this ISR toggles PC7 in lock-step so the two pins drive
+; the piezo BTL (anti-phase, ~2× the half-volume single-pin swing).
+;
+; sbi/cbi/PINx-bit-write don't touch SREG flags, so we can skip the
+; SREG save and keep the ISR to just two instructions.
+.global _timer3_compa_isr
+_timer3_compa_isr:
+    sbi   _SFR_IO_ADDR(PINC), 7
     reti
 
 .global _reset
@@ -352,11 +376,17 @@ no_pending_sfx:
     ldi   r31, hi8(framebuffer)
     rcall oled_render
 
-    ; --- Frame cap: sleep until Timer1 Compare-A interrupt fires ---
-    ; SMCR is already armed (SE=1, SLEEP_IDLE). The ISR is a bare reti;
-    ; it exists only so the CPU wakes back up here.
+    ; --- Frame cap: sleep until Timer1 says the next frame is due. ---
+    ; The audio engine fires Timer3 interrupts mid-frame to drive PC7 in
+    ; anti-phase with PC6; those wakes return to the instruction after
+    ; sleep with frame_ready still 0, so we loop back to sleep and resume.
+ml_wait:
     sleep
-
+    lds   r25, frame_ready
+    cpi   r25, 0
+    breq  ml_wait
+    clr   r25
+    sts   frame_ready, r25
     rjmp  main_loop
 
 ; ============================================================================

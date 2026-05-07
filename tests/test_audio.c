@@ -134,7 +134,39 @@ static void test_death_overrides_fire(void) {
                   sound_id(), sound_frame());
 }
 
-// ---- 8. SFX_FIRE only triggers when cooldown allows (no fire on blocked frames) ----
+// ---- 8. BTL audio: TIMSK3 OCIE3A enabled after init so the ISR fires
+//        on every OC3A compare match to drive PC7 in anti-phase. ----
+//        TIMSK3 mem addr is 0x71 on ATmega32u4; OCIE3A is bit 1 = 0x02.
+static void test_init_enables_timer3_compa_interrupt(void) {
+    sim_sync(S);
+    int timsk3 = sim_mem_r(S, 0x71);                 // TIMSK3 = 0x71
+    SIM_CHECK_MSG((timsk3 & 0x02) != 0,
+                  "TIMSK3 should have OCIE3A set; got 0x%02X", timsk3);
+}
+
+// ---- 9. BTL audio: PC6 and PC7 should be in anti-phase at frame end —
+//        but Timer3 fires many ISRs during sleep so PC7's toggle parity
+//        is sensitive to exact cycle alignment, hard to verify cleanly
+//        in a unit test. Hardware verification happens on the device.
+//        See test #10 for the deterministic part of the BTL path.
+
+// ---- 10. BTL audio: both pins return to low when sound ends. ----
+static void test_pc7_low_when_silent(void) {
+    scenario(28, 0);
+    sim_btn_press(S->btn_b);
+    quiet_run();
+    sim_btn_release(S->btn_b);
+    // FIRE SFX runs ~6 frames + sentinel; cooldown blocks new fires
+    for (int i = 0; i < SFX_FIRE_FRAMES + 4; i++) quiet_run();
+    SIM_CHECK_MSG(sound_id() == 0, "SFX should be done");
+    int portc = sim_mem_r(S, 0x28);
+    SIM_CHECK_MSG((portc & 0x80) == 0,
+                  "PORTC bit 7 should be low after sound ends; got 0x%02X", portc);
+    SIM_CHECK_MSG((portc & 0x40) == 0,
+                  "PORTC bit 6 should also be low; got 0x%02X", portc);
+}
+
+// ---- 11. SFX_FIRE only triggers when cooldown allows (no fire on blocked frames) ----
 static void test_no_fire_sfx_during_cooldown(void) {
     scenario(28, 0);
     sim_btn_press(S->btn_b);
@@ -161,6 +193,8 @@ int main(int argc, char **argv) {
     test_hit_sfx_completes();
     test_ship_collision_triggers_death_sfx();
     test_death_overrides_fire();
+    test_init_enables_timer3_compa_interrupt();
+    test_pc7_low_when_silent();
     test_no_fire_sfx_during_cooldown();
 
     sim_coverage_save_for(argv[0]);
