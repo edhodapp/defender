@@ -64,12 +64,11 @@ static void scenario_only(void) {
     sim_set_ship(S, 28, 0, 0);
 }
 
-// ---- 1. Shooting a carrying Lander frees the humanoid as a falling one ----
-static void test_shoot_carrier_frees_humanoid(void) {
+// ---- 1. Shooting a carrying Lander (top half) frees the humanoid ----
+static void test_shoot_carrier_top_frees_humanoid(void) {
     scenario_only();
     place_lander_carrying(0, 80, 20);                // mid-air carrying
-    // Beam at lander altitude, x just to the left of it.
-    sim_place_beam(S, 0, 76, 24, 0);                 // beam y=24 in [20, 27]
+    sim_place_beam(S, 0, 76, 24, 0);                 // beam_y=24 in [20, 27]
     sim_run_frame(S);
     SIM_CHECK_MSG(slot_active(0),
                   "slot should still be active (transformed, not killed)");
@@ -83,6 +82,33 @@ static void test_shoot_carrier_frees_humanoid(void) {
     SIM_CHECK_MSG(slot_y(0) == 20,
                   "freed humanoid should inherit lander's y; got %d",
                   slot_y(0));
+}
+
+// ---- 1b. Shooting the dangling humanoid (lower half) also frees it.
+//         Bbox for a carrying Lander is 16 rows tall so the visible
+//         humanoid sprite at lander_y+8 is also a valid hit zone. ----
+static void test_shoot_carrier_dangling_humanoid_frees(void) {
+    scenario_only();
+    place_lander_carrying(0, 80, 20);
+    // Beam at y=30, which is in the LOWER half of the extended bbox
+    // (rows 28..35) — i.e., aimed at the visible humanoid hanging below
+    // the lander.
+    sim_place_beam(S, 0, 76, 30, 0);
+    sim_run_frame(S);
+    SIM_CHECK_MSG(slot_active(0),
+                  "expected hit on dangling humanoid to transform slot");
+    SIM_CHECK_MSG(slot_type(0) == TYPE_HUMANOID && slot_falling(0),
+                  "expected freed falling humanoid; byte0=0x%02X", slot_byte0(0));
+}
+
+// ---- 1c. Empty-handed Lander still has 8-row bbox (not extended). ----
+static void test_empty_lander_8row_bbox(void) {
+    scenario_only();
+    sim_place_lander(S, 0, 80, 20);                  // not carrying
+    sim_place_beam(S, 0, 76, 30, 0);                  // beam_y=30, outside 8-row bbox
+    sim_run_frame(S);
+    SIM_CHECK_MSG(slot_active(0),
+                  "non-carrying lander should not be hit at y=30 (out of 8-row bbox)");
 }
 
 // ---- 2. Shooting an empty-handed Lander just kills it (no slot survives) ----
@@ -159,7 +185,9 @@ int main(int argc, char **argv) {
     if (argc != 2) { fprintf(stderr, "usage: %s <defender.elf>\n", argv[0]); return 2; }
     S = sim_boot(argv[1]);
 
-    test_shoot_carrier_frees_humanoid();
+    test_shoot_carrier_top_frees_humanoid();
+    test_shoot_carrier_dangling_humanoid_frees();
+    test_empty_lander_8row_bbox();
     test_shoot_empty_lander_just_kills();
     test_shoot_grounded_humanoid();
     test_shoot_falling_humanoid_kills();

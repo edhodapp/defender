@@ -722,39 +722,50 @@ cc_ent_loop:
     ld    r25, Y
     sbrs  r25, 7
     rjmp  cc_ent_next
-    ; Type check — beam can hit Landers and Humanoids.
+    ; Type check — beam can hit Landers and Humanoids. Use breq + rjmp so
+    ; the "skip" target (cc_ent_next) is reached via rjmp's 12-bit range
+    ; rather than a 7-bit conditional that overflows now that the body has
+    ; grown past 64 words.
     mov   r26, r25
     swap  r26
     andi  r26, 0x07
     cpi   r26, TYPE_LANDER
     breq  cc_ent_typed
     cpi   r26, TYPE_HUMANOID
-    brne  cc_ent_next
+    breq  cc_ent_typed
+    rjmp  cc_ent_next
 cc_ent_typed:
+    ; bbox y-height (r24): 16 if a carrying Lander (covers the dangling
+    ; humanoid sprite at lander_y+8); else 8.  r25 still holds byte 0,
+    ; r26 still holds type.
+    ldi   r24, 8
+    cpi   r26, TYPE_LANDER
+    brne  cc_have_height
+    sbrs  r25, 0
+    rjmp  cc_have_height
+    ldi   r24, 16
+cc_have_height:
     ; screen_x = world_x - scroll
     ldd   r26, Y+1
     lds   r27, scroll_offset
     sub   r26, r27
     sbrc  r26, 7
-    rjmp  cc_ent_next                  ; off-screen left
-    ; beam_x in [screen_x, screen_x+7]?
+    rjmp  cc_ent_next
     cp    r16, r26
     brlo  cc_ent_next
     mov   r27, r26
     subi  r27, -8
     cp    r16, r27
     brsh  cc_ent_next
-    ; beam_y in [entity_y, entity_y+7]?
+    ; beam_y in [entity_y, entity_y + r24)?
     ldd   r25, Y+2
     andi  r25, 0x3F
     cp    r17, r25
     brlo  cc_ent_next
     mov   r27, r25
-    subi  r27, -8
+    add   r27, r24
     cp    r17, r27
     brsh  cc_ent_next
-    ; HIT — disposition handled in a small subroutine to keep this loop
-    ; body short enough that brXX targets to cc_ent_next stay in 7-bit range.
     rcall cc_handle_hit
     pop   r18
     pop   r29
@@ -767,14 +778,18 @@ cc_ent_typed:
 cc_ent_next:
     adiw  r28, ENTITY_SIZE
     dec   r19
-    brne  cc_ent_loop
+    breq  cc_ent_loop_done
+    rjmp  cc_ent_loop                    ; rjmp range covers the larger body
+cc_ent_loop_done:
     pop   r18
     pop   r29
     pop   r28
 cc_proj_next:
     adiw  r28, PROJ_SIZE
     dec   r18
-    brne  cc_proj_loop
+    breq  cc_proj_loop_done
+    rjmp  cc_proj_loop                   ; rjmp for the same range reason
+cc_proj_loop_done:
     ret
 
 ; cc_handle_hit: a beam has just landed on the entity at Y. Decide what to
