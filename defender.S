@@ -136,6 +136,13 @@ _reset:
     ldi   r16, hi8(RAMEND)
     out   _SFR_IO_ADDR(SPH), r16
 
+    ; Hardware reset leaves SRAM undefined. Zero the flag bytes that
+    ; need to start at 0 for deterministic boot — the test harness can
+    ; override skip_title_flag *after* this (sim_boot runs a handful of
+    ; cycles, then sim_mem_w's the flag, then continues warmup).
+    clr   r16
+    sts   skip_title_flag, r16
+
     rcall oled_init
     rcall input_init
     rcall audio_init

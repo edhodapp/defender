@@ -295,7 +295,9 @@ int main(int argc, char **argv) {
 
     int rc = 0;
 
-    // Set the test-mode skip-title flag so _reset bypasses the splash UI.
+    // Run past _reset's stack init (which zeroes skip_title_flag), then
+    // set the flag so the firmware bypasses the splash UI.
+    while (avr->cycle < 500) avr_run(avr);
     avr_symbol_t **sym_arr = fw.symbol;
     for (uint32_t i = 0; i < fw.symbolcount; i++) {
         if (strcmp(sym_arr[i]->symbol, "skip_title_flag") == 0) {
