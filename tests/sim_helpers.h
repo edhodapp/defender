@@ -29,6 +29,9 @@ typedef struct {
     uint16_t sym_sound_id;
     uint16_t sym_sound_frame;
     uint16_t sym_pending_sfx;
+    uint16_t sym_wave_number;
+    uint16_t sym_wave_to_spawn;
+    uint16_t sym_enemies_alive;
     uint16_t sym_projectiles;
     uint16_t sym_entities;
     uint16_t sym_framebuffer;

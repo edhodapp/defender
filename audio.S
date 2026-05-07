@@ -31,6 +31,7 @@
 .equ SFX_DEATH, 3
 .equ SFX_GRAB,  4
 .equ SFX_START, 5
+.equ SFX_WAVE,  6
 
 .section .bss, "aw", @nobits
 
@@ -76,8 +77,8 @@ audio_init:
 audio_play:
     cpi   r24, SFX_FIRE
     brlo  audio_play_done                 ; id 0 → ignore
-    cpi   r24, SFX_START + 1
-    brsh  audio_play_done                 ; id > SFX_START → ignore
+    cpi   r24, SFX_WAVE + 1
+    brsh  audio_play_done                 ; id > SFX_WAVE → ignore
     sts   sound_id, r24
     clr   r25
     sts   sound_frame, r25
@@ -168,6 +169,7 @@ audio_dispatch:
     .word sfx_death_data
     .word sfx_grab_data
     .word sfx_start_data
+    .word sfx_wave_data
 
 ; SFX_FIRE — fast descending chirp, ~6 frames (= 100 ms @ 60 Hz).
 ; 5 kHz → 1.4 kHz.
@@ -203,4 +205,12 @@ sfx_start_data:
     .word 1276, 1276                      ; ~784 Hz (~G5)
     .word 954,  954                       ; ~1.05 kHz (~C6)
     .word 759,  759                       ; ~1.32 kHz (~E6)
+    .word 0xFFFF
+
+; SFX_WAVE — wave-change fanfare. Three-note ascending fifths
+; D5 → A5 → D6 (~6 frames ≈ 100 ms). "Next level" feel.
+sfx_wave_data:
+    .word 1703, 1703                      ; ~587 Hz (~D5)
+    .word 1135, 1135                      ; ~880 Hz (~A5)
+    .word 850,  850                       ; ~1.18 kHz (~D6)
     .word 0xFFFF

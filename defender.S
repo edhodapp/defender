@@ -32,6 +32,19 @@ fire_cooldown:  .skip 1                  ; auto-fire throttle; reloads to FIRE_C
 .global frame_ready
 frame_ready:    .skip 1                  ; set by Timer1 ISR; cleared after main_loop sees it
 
+; Wave structure (Phase 4):
+;   wave_number   : current wave (1..6, capped)
+;   wave_to_spawn : enemies remaining to spawn this wave
+;   enemies_alive : active Landers + Mutants currently in play
+; A wave ends when both wave_to_spawn AND enemies_alive are zero; main_loop
+; queues SFX_WAVE_CHANGE, increments wave_number, and reloads wave_to_spawn.
+.global wave_number
+wave_number:    .skip 1
+.global wave_to_spawn
+wave_to_spawn:  .skip 1
+.global enemies_alive
+enemies_alive:  .skip 1
+
 ; 64 entity slots, 3 bytes each. Packed layout:
 ;   byte 0: bit 7   = active
 ;           bits 4-6 = type (0..7)
@@ -135,13 +148,22 @@ _reset:
     dec   r25
     brne  1b
 
-    ; Spawn one Lander at world_x=100, y=10 (slot 0)
+    ; Spawn one Lander at world_x=100, y=10 (slot 0). This boot Lander
+    ; counts toward wave 1's 3-enemy total — the periodic spawner will
+    ; bring 2 more.
     ldi   r24, (1<<7) | (TYPE_LANDER<<4)   ; active, type=Lander, state=0
     sts   entities + 0, r24
     ldi   r24, 100
     sts   entities + 1, r24                ; world_x
     ldi   r24, 10
     sts   entities + 2, r24                ; y (state2 = 0)
+
+    ; Wave 1 setup: 1 boot Lander already alive, 2 more to spawn.
+    ldi   r24, 1
+    sts   wave_number, r24
+    sts   enemies_alive, r24
+    ldi   r24, 2
+    sts   wave_to_spawn, r24
 
     ; Spawn 8 Humanoids on the ground (slots 1..8) at world_x = 16, 48, 80, ...
     ldi   r28, lo8(entities + 1*ENTITY_SIZE)
@@ -348,6 +370,33 @@ no_b_press:
     clr   r24
     sts   pending_sfx, r24
 no_pending_sfx:
+
+    ; --- Wave-end check: when nothing is left to spawn AND nothing's alive,
+    ;     advance the wave, queue SFX_WAVE_CHANGE, reload wave_to_spawn. ---
+    lds   r24, wave_to_spawn
+    cpi   r24, 0
+    brne  wave_in_progress
+    lds   r24, enemies_alive
+    cpi   r24, 0
+    brne  wave_in_progress
+    ; Wave done. Increment wave_number (cap at 6).
+    lds   r24, wave_number
+    cpi   r24, 6
+    brsh  wave_at_max
+    inc   r24
+    sts   wave_number, r24
+wave_at_max:
+    ; wave_to_spawn = min(wave_number + 2, 8)
+    lds   r24, wave_number
+    subi  r24, -2                        ; r24 = wave_number + 2
+    cpi   r24, 9
+    brlo  wave_size_ok
+    ldi   r24, 8
+wave_size_ok:
+    sts   wave_to_spawn, r24
+    ldi   r24, 6                         ; SFX_WAVE_CHANGE
+    rcall audio_play
+wave_in_progress:
 
     ; --- Render this frame ---
     rcall clear_fb
@@ -702,6 +751,10 @@ draw_pixel:
 ; Clobbers: r18, r24, r25, Y
 ; ============================================================================
 try_spawn_lander:
+    ; Wave gate: skip if the wave has no more attackers to spawn.
+    lds   r24, wave_to_spawn
+    cpi   r24, 0
+    breq  tsl_skip
     ldi   r28, lo8(entities)
     ldi   r29, hi8(entities)
     ldi   r18, ENTITY_SLOTS
@@ -712,7 +765,8 @@ tsl_find_loop:
     adiw  r28, ENTITY_SIZE
     dec   r18
     brne  tsl_find_loop
-    ret                                  ; no free slots
+tsl_skip:
+    ret                                  ; no free slots OR wave full
 tsl_have_slot:
     ; world_x = spawn_pos_idx * 32 + 16
     lds   r25, spawn_pos_idx
@@ -731,6 +785,13 @@ tsl_have_slot:
     lds   r24, spawn_pos_idx
     inc   r24
     sts   spawn_pos_idx, r24
+    ; Wave bookkeeping: one fewer to spawn, one more alive.
+    lds   r24, wave_to_spawn
+    dec   r24
+    sts   wave_to_spawn, r24
+    lds   r24, enemies_alive
+    inc   r24
+    sts   enemies_alive, r24
     ret
 
 ; ============================================================================
@@ -864,15 +925,32 @@ cc_handle_hit:
     ; Upper half — free the humanoid as a falling one (lander dies).
     ldi   r25, 0x80 | (TYPE_HUMANOID << 4) | 0x01
     st    Y, r25
-    ret
+    rjmp  chh_dec_enemy                  ; lander died — decrement count
 chh_drop_cargo:
-    ; Clear carry bit; lander stays active.
+    ; Clear carry bit; lander stays active. Enemy count unchanged.
     andi  r25, 0xFE
     st    Y, r25
     ret
 chh_kill:
+    ; Pre-clear: capture original type so we know whether to decrement.
+    ld    r25, Y
+    mov   r27, r25
+    swap  r27
+    andi  r27, 0x07                      ; r27 = type
     clr   r25
     st    Y, r25
+    cpi   r27, TYPE_LANDER
+    breq  chh_dec_enemy
+    cpi   r27, TYPE_MUTANT
+    breq  chh_dec_enemy
+    ret                                  ; humanoid kill — no count change
+chh_dec_enemy:
+    lds   r25, enemies_alive
+    cpi   r25, 0
+    breq  chh_dec_done                   ; saturate at 0
+    dec   r25
+    sts   enemies_alive, r25
+chh_dec_done:
     ret
 
 ; ============================================================================

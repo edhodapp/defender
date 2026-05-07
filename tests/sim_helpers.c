@@ -85,6 +85,9 @@ sim_t *sim_boot(const char *elf_path) {
     s->sym_sound_id       = sim_lookup(s, "sound_id");
     s->sym_sound_frame    = sim_lookup(s, "sound_frame");
     s->sym_pending_sfx    = sim_lookup(s, "pending_sfx");
+    s->sym_wave_number    = sim_lookup(s, "wave_number");
+    s->sym_wave_to_spawn  = sim_lookup(s, "wave_to_spawn");
+    s->sym_enemies_alive  = sim_lookup(s, "enemies_alive");
     s->sym_projectiles    = sim_lookup(s, "projectiles");
     s->sym_entities       = sim_lookup(s, "entities");
     s->sym_framebuffer    = sim_lookup(s, "framebuffer");
@@ -183,6 +186,13 @@ void sim_clear_state_minimal(sim_t *s) {
     sim_mem_w(s, s->sym_sound_id, 0);
     sim_mem_w(s, s->sym_sound_frame, 0);
     sim_mem_w(s, s->sym_pending_sfx, 0);
+    // Reset wave state so spawn-related tests get unconstrained behavior
+    // (entities cleared → no enemies; wave_to_spawn=8 gives plenty of room
+    // for any test that just wants to see the spawner fire without setting
+    // up its own wave state).
+    sim_mem_w(s, s->sym_wave_number, 1);
+    sim_mem_w(s, s->sym_wave_to_spawn, 8);
+    sim_mem_w(s, s->sym_enemies_alive, 0);
 }
 
 void sim_set_ship(sim_t *s, int sprite_y, int scroll, int facing) {
