@@ -63,7 +63,7 @@ static avr_irq_t *btn_irq(avr_t *avr, char port, int bit) {
     return avr_io_getirq(avr, AVR_IOCTL_IOPORT_GETIRQ(port), bit);
 }
 
-sim_t *sim_boot(const char *elf_path) {
+sim_t *sim_boot_no_warmup(const char *elf_path) {
     sim_t *s = calloc(1, sizeof(*s));
     if (!s) { fprintf(stderr, "calloc failed\n"); exit(2); }
     if (elf_read_firmware(elf_path, &s->fw) != 0) {
@@ -102,10 +102,15 @@ sim_t *sim_boot(const char *elf_path) {
     s->btn_a     = btn_irq(s->avr, 'E', 6);
     s->btn_b     = btn_irq(s->avr, 'B', 4);
 
+    return s;
+}
+
+sim_t *sim_boot(const char *elf_path) {
+    sim_t *s = sim_boot_no_warmup(elf_path);
     // _reset zeroes skip_title_flag for deterministic hardware boot, so
-    // we have to set it AFTER the firmware has executed past that point
-    // but BEFORE it reaches the title-decision check. A few hundred
-    // cycles is well past the early stack/flag init.
+    // set it AFTER the firmware has executed past that point but BEFORE
+    // it reaches the title-decision check. A few hundred cycles is well
+    // past the early stack/flag init.
     sim_run_cycles(s, 500);
     sim_mem_w(s, s->sym_skip_title_flag, 1);
     sim_run_cycles(s, 2 * SIM_FRAME_CYCLES);

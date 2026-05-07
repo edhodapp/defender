@@ -14,7 +14,7 @@ LIBS    := -lsimavr -lelf
 
 BUILD := build
 
-.PHONY: all test profile clean
+.PHONY: all test profile screenshot screenshots clean
 
 all: $(BUILD)/test_blinky $(BUILD)/test_ssd1306 $(BUILD)/test_oled $(BUILD)/test_defender \
      $(BUILD)/test_collision $(BUILD)/test_proj_motion $(BUILD)/test_input \
@@ -93,6 +93,28 @@ profile: $(BUILD)/profile
 	$(BUILD)/profile ../build/defender.elf
 	@echo
 	./profile_report.py ../build/defender.elf
+
+$(BUILD)/screenshot: screenshot.c sim_helpers.c sim_helpers.h ssd1306.c ssd1306.h | $(BUILD)
+	$(CC) $(CFLAGS) screenshot.c sim_helpers.c ssd1306.c $(LDFLAGS) $(LIBS) -o $@
+
+# Single-scenario screenshot. Usage: make screenshot SCENARIO=title [OUT=/tmp/x.pbm]
+screenshot: $(BUILD)/screenshot
+	@$(MAKE) -C .. all >/dev/null
+	@if [ -z "$(SCENARIO)" ]; then \
+	    echo "usage: make screenshot SCENARIO=<name> [OUT=<path>]"; \
+	    echo "scenarios: title title-low title-high game abduction carrying mutant"; \
+	    exit 2; \
+	fi
+	$(BUILD)/screenshot ../build/defender.elf $(SCENARIO) $(or $(OUT),/tmp/$(SCENARIO).pbm)
+
+# All-scenarios sweep into /tmp/defender-screenshots/
+screenshots: $(BUILD)/screenshot
+	@$(MAKE) -C .. all >/dev/null
+	@mkdir -p /tmp/defender-screenshots
+	@for s in title title-low title-high game abduction carrying mutant; do \
+	    $(BUILD)/screenshot ../build/defender.elf $$s /tmp/defender-screenshots/$$s.pbm; \
+	done
+	@echo "screenshots in /tmp/defender-screenshots/"
 
 # Host-side unit tests (pull in ssd1306.c; ssd1306.c includes simavr headers
 # for the attach() callbacks, so we still link libsimavr)

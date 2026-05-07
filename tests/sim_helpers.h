@@ -44,7 +44,8 @@ typedef struct {
 } sim_t;
 
 // ---- Boot / teardown ----
-sim_t *sim_boot(const char *elf_path);
+sim_t *sim_boot(const char *elf_path);            // boot + skip-title + warmup
+sim_t *sim_boot_no_warmup(const char *elf_path);  // boot + symbols only; caller drives warmup
 uint16_t sim_lookup(const sim_t *s, const char *name);
 
 // ---- Memory ----
