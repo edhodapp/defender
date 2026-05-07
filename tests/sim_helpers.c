@@ -84,6 +84,7 @@ sim_t *sim_boot(const char *elf_path) {
     s->sym_fire_cooldown  = sim_lookup(s, "fire_cooldown");
     s->sym_sound_id       = sim_lookup(s, "sound_id");
     s->sym_sound_frame    = sim_lookup(s, "sound_frame");
+    s->sym_pending_sfx    = sim_lookup(s, "pending_sfx");
     s->sym_projectiles    = sim_lookup(s, "projectiles");
     s->sym_entities       = sim_lookup(s, "entities");
     s->sym_framebuffer    = sim_lookup(s, "framebuffer");
@@ -181,6 +182,7 @@ void sim_clear_state_minimal(sim_t *s) {
     sim_mem_w(s, s->sym_fire_cooldown, 0);
     sim_mem_w(s, s->sym_sound_id, 0);
     sim_mem_w(s, s->sym_sound_frame, 0);
+    sim_mem_w(s, s->sym_pending_sfx, 0);
 }
 
 void sim_set_ship(sim_t *s, int sprite_y, int scroll, int facing) {
@@ -203,6 +205,9 @@ void sim_place_beam(sim_t *s, int slot, int x, int y, int dx_sign) {
 
 int sim_lander_active(const sim_t *s, int slot) {
     return (sim_mem_r(s, s->sym_entities + slot*3) & 0x80) != 0;
+}
+int sim_lander_carrying(const sim_t *s, int slot) {
+    return (sim_mem_r(s, s->sym_entities + slot*3) & 0x01) != 0;
 }
 int sim_beam_active(const sim_t *s, int slot) {
     return (sim_mem_r(s, s->sym_projectiles + slot*2) & 0x80) != 0;

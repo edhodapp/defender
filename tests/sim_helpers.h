@@ -28,6 +28,7 @@ typedef struct {
     uint16_t sym_fire_cooldown;
     uint16_t sym_sound_id;
     uint16_t sym_sound_frame;
+    uint16_t sym_pending_sfx;
     uint16_t sym_projectiles;
     uint16_t sym_entities;
     uint16_t sym_framebuffer;
@@ -73,6 +74,7 @@ void sim_place_beam(sim_t *s, int slot, int x, int y, int dx_sign);
 
 // ---- State queries ----
 int sim_lander_active(const sim_t *s, int slot);
+int sim_lander_carrying(const sim_t *s, int slot);    // Phase 2: byte0 bit 0
 int sim_beam_active  (const sim_t *s, int slot);
 int sim_lander_y     (const sim_t *s, int slot);
 int sim_lander_world_x(const sim_t *s, int slot);

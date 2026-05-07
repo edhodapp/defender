@@ -909,22 +909,169 @@ update_dispatch:
 update_noop:
     ret
 
-; Lander update: drift down by 1 row every 4 frames; clamp at y=47.
-; Y points at the slot's byte 0; preserve Y.
+; Lander update — descend to humanoid altitude, hover on its head, pause,
+; grab, ascend. Defender-faithful abduction.
+;
+; State encoding (byte 0 bits 0-3):
+;   bit 0     = carry flag (1 = carrying humanoid)
+;   bits 1-3  = pause counter (0..7). Set to 7 the first time we land on
+;               an aligned humanoid's head (y == 40). Decrements every 4
+;               frames; the 1→0 transition fires the actual grab. 7 × 4 =
+;               28 pause frames ≈ 470 ms at 60 Hz.
+;
+; Y points at the slot's byte 0 on entry; preserved on return.
 update_lander:
+    ld    r24, Y
+    sbrc  r24, 0
+    rjmp  ul_carrying
+    mov   r25, r24
+    andi  r25, 0x0E                      ; pause counter
+    brne  ul_pausing
+
+    ; Idle — descend if drift frame, then look for a humanoid below.
+    lds   r25, frame_counter
+    andi  r25, 0x03
+    brne  ul_check_align
+    ldd   r25, Y+2
+    mov   r24, r25
+    andi  r24, 0xC0                      ; preserve state2
+    andi  r25, 0x3F
+    cpi   r25, 47
+    brsh  ul_check_align                 ; at bottom — no further descent
+    inc   r25
+    or    r25, r24
+    std   Y+2, r25
+ul_check_align:
+    ; If exactly at y == 40 and an active humanoid is x-aligned (|dx| < 8),
+    ; arm the pause counter.
+    ldd   r25, Y+2
+    andi  r25, 0x3F
+    cpi   r25, 40
+    brne  ul_done
+    rcall ul_humanoid_aligned
+    cpi   r24, 0
+    breq  ul_done
+    ld    r24, Y
+    ori   r24, 0x0E                      ; pause = 7 (bits 1-3)
+    st    Y, r24
+    rjmp  ul_done
+
+ul_pausing:
     lds   r25, frame_counter
     andi  r25, 0x03
     brne  ul_done                        ; not a drift frame
-    ldd   r25, Y+2                       ; byte 2: state2(6-7) | y(0-5)
+    ld    r24, Y
+    subi  r24, 0x02                      ; pause -= 1 (bit 1 = "ones" of pause)
+    st    Y, r24
+    andi  r24, 0x0E
+    brne  ul_done                        ; pause > 0; keep waiting
+    rcall ul_do_grab                     ; pause expired — grab now
+    rjmp  ul_done
+
+ul_carrying:
+    lds   r25, frame_counter
+    andi  r25, 0x03
+    brne  ul_done
+    ldd   r25, Y+2
     mov   r24, r25
-    andi  r24, 0xC0                      ; preserve state2
-    andi  r25, 0x3F                      ; isolate y
-    cpi   r25, 47
-    brsh  ul_done                        ; at bottom — stop drifting
-    inc   r25
-    or    r25, r24                       ; recombine
+    andi  r24, 0xC0
+    andi  r25, 0x3F
+    cpi   r25, 0
+    breq  ul_done                        ; pinned at top
+    dec   r25
+    or    r25, r24
     std   Y+2, r25
 ul_done:
+    ret
+
+; ul_humanoid_aligned: returns r24 = 1 if any active humanoid is within ±7
+; world cols of the lander, else r24 = 0. Y on entry points at the lander
+; slot; preserved on return.
+ul_humanoid_aligned:
+    ldd   r25, Y+1                       ; lander world_x
+    push  r28
+    push  r29
+    push  r18
+    ldi   r28, lo8(entities)
+    ldi   r29, hi8(entities)
+    ldi   r18, ENTITY_SLOTS
+uha_loop:
+    ld    r26, Y
+    sbrs  r26, 7
+    rjmp  uha_next
+    mov   r27, r26
+    swap  r27
+    andi  r27, 0x07
+    cpi   r27, TYPE_HUMANOID
+    brne  uha_next
+    ldd   r27, Y+1
+    sub   r27, r25
+    sbrc  r27, 7
+    neg   r27
+    cpi   r27, 8
+    brsh  uha_next
+    pop   r18
+    pop   r29
+    pop   r28
+    ldi   r24, 1
+    ret
+uha_next:
+    adiw  r28, ENTITY_SIZE
+    dec   r18
+    brne  uha_loop
+    pop   r18
+    pop   r29
+    pop   r28
+    ldi   r24, 0
+    ret
+
+; ul_do_grab: pause counter just expired. Find the aligned humanoid (still
+; should be at the same x), deactivate it, set the lander's carry bit, and
+; queue SFX_GRAB. If the humanoid was killed during the pause (e.g. by a
+; beam), this scan finds no match and the lander silently resumes its idle
+; state (pause bits are already 0 from the caller's subi).
+; Y points at the lander slot; preserved.
+ul_do_grab:
+    ldd   r25, Y+1
+    push  r28
+    push  r29
+    push  r18
+    ldi   r28, lo8(entities)
+    ldi   r29, hi8(entities)
+    ldi   r18, ENTITY_SLOTS
+udg_loop:
+    ld    r26, Y
+    sbrs  r26, 7
+    rjmp  udg_next
+    mov   r27, r26
+    swap  r27
+    andi  r27, 0x07
+    cpi   r27, TYPE_HUMANOID
+    brne  udg_next
+    ldd   r27, Y+1
+    sub   r27, r25
+    sbrc  r27, 7
+    neg   r27
+    cpi   r27, 8
+    brsh  udg_next
+    clr   r27
+    st    Y, r27
+    pop   r18
+    pop   r29
+    pop   r28
+    ld    r27, Y
+    ori   r27, 1
+    st    Y, r27
+    ldi   r27, 4                         ; SFX_GRAB
+    sts   pending_sfx, r27
+    ret
+udg_next:
+    adiw  r28, ENTITY_SIZE
+    dec   r18
+    brne  udg_loop
+    pop   r18
+    pop   r29
+    pop   r28
     ret
 
 ; ============================================================================
@@ -975,6 +1122,8 @@ render_noop:
     ret
 
 ; render_lander: convert world_x → screen_x; if visible, blit lander sprite.
+; If the Lander is carrying a humanoid (byte 0 bit 0), also blit the humanoid
+; sprite directly below.
 ; Y points at the slot's byte 0 on entry. Allowed to clobber Y (caller saves).
 render_lander:
     ldd   r20, Y+1                       ; world_x
@@ -983,13 +1132,31 @@ render_lander:
     sbrc  r20, 7
     rjmp  rl_offscreen                   ; negative → off the left edge
     cpi   r20, 121
-    brsh  rl_offscreen                   ; >= 121 → too close to right edge for 8-wide sprite
+    brsh  rl_offscreen                   ; >= 121 → too close to right edge
+    ld    r22, Y                         ; byte 0 (for carry-bit check)
     ldd   r21, Y+2
     andi  r21, 0x3F                      ; r21 = y
     mov   r16, r20                       ; x for blit_8x8
     mov   r17, r21                       ; y
+    push  r20
+    push  r21
+    push  r22
     ldi   r30, lo8(lander_sprite)
     ldi   r31, hi8(lander_sprite)
+    rcall blit_8x8
+    pop   r22
+    pop   r21
+    pop   r20
+    sbrs  r22, 0                         ; carrying humanoid?
+    rjmp  rl_offscreen
+    ; Blit humanoid 8 rows below; clamp if off-screen vertically.
+    mov   r17, r21
+    subi  r17, -8                        ; r17 = lander_y + 8
+    cpi   r17, 56
+    brsh  rl_offscreen                   ; below visible area
+    mov   r16, r20
+    ldi   r30, lo8(humanoid_sprite)
+    ldi   r31, hi8(humanoid_sprite)
     rcall blit_8x8
 rl_offscreen:
     ret

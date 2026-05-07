@@ -29,6 +29,7 @@
 .equ SFX_FIRE,  1
 .equ SFX_HIT,   2
 .equ SFX_DEATH, 3
+.equ SFX_GRAB,  4
 
 .section .bss, "aw", @nobits
 
@@ -70,8 +71,8 @@ audio_init:
 audio_play:
     cpi   r24, SFX_FIRE
     brlo  audio_play_done                 ; id 0 → ignore
-    cpi   r24, SFX_DEATH + 1
-    brsh  audio_play_done                 ; id > SFX_DEATH → ignore
+    cpi   r24, SFX_GRAB + 1
+    brsh  audio_play_done                 ; id > SFX_GRAB → ignore
     sts   sound_id, r24
     clr   r25
     sts   sound_frame, r25
@@ -155,6 +156,7 @@ audio_dispatch:
     .word sfx_fire_data
     .word sfx_hit_data
     .word sfx_death_data
+    .word sfx_grab_data
 
 ; SFX_FIRE — fast descending chirp, ~6 frames (= 100 ms @ 60 Hz).
 ; 5 kHz → 1.4 kHz.
@@ -174,4 +176,10 @@ sfx_death_data:
     .word  200,  230,  260,  300,  350,  400,  470,  540,  620,  720
     .word  830,  950, 1100, 1280, 1470, 1690, 1940, 2230, 2560, 2940
     .word 3380, 3880, 4460, 5120, 5880, 6760, 7770, 8930,10260,11790
+    .word 0xFFFF
+
+; SFX_GRAB — rising tone (~8 frames). Lander has snatched a humanoid;
+; ascending pitch from ~660 Hz to ~4 kHz suggests "lifted up".
+sfx_grab_data:
+    .word 1500, 1200, 900, 700, 500, 350, 250
     .word 0xFFFF
