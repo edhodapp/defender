@@ -53,6 +53,11 @@ score_lo:       .skip 1
 .global score_hi
 score_hi:       .skip 1
 
+; Ship lives. Defender started with 3; bonus ship every 10000 points.
+; Top of screen renders up to 3 ship icons regardless of internal value.
+.global lives
+lives:          .skip 1
+
 ; Difficulty (0=LOW, 1=MED, 2=HIGH). Wave sizes scale via wave_sizes_table.
 .global difficulty
 difficulty:     .skip 1
@@ -197,10 +202,12 @@ _reset:
     rcall lookup_wave_size                 ; r24 = wave 1 size for current difficulty
     dec   r24                              ; subtract the boot Lander
     sts   wave_to_spawn, r24
-    ; Score starts at 0.
+    ; Score starts at 0; lives starts at 3 (Defender convention).
     clr   r24
     sts   score_lo, r24
     sts   score_hi, r24
+    ldi   r24, 3
+    sts   lives, r24
 
     ; Spawn 8 Humanoids on the ground (slots 1..8) at world_x = 16, 48, 80, ...
     ldi   r28, lo8(entities + 1*ENTITY_SIZE)
@@ -455,6 +462,7 @@ wave_in_progress:
     rcall render_horizon
     rcall render_radar
     rcall render_wave_indicator
+    rcall render_lives
     rcall render_score
     rcall render_projectiles
     rcall render_entities
@@ -718,6 +726,32 @@ blit_glyph_at_origin:
     rjmp  blit_glyph
 
 ; ============================================================================
+; render_lives: draw up to 3 ship icons in cols 8/16/24 (between the
+; wave-number digit and the radar bar). Caps the visible count at 3 even
+; if the player has accumulated more — internal `lives` keeps the real
+; count for the bonus-ship convention.
+; ============================================================================
+render_lives:
+    lds   r21, lives                     ; r21 preserved across blit_8x8
+    cpi   r21, 4
+    brlo  rl_have_count
+    ldi   r21, 3                         ; cap visible at 3
+rl_have_count:
+    cpi   r21, 0
+    breq  rl_done
+    ldi   r16, 8
+    ldi   r17, 0
+rl_loop:
+    ldi   r30, lo8(ship_right)
+    ldi   r31, hi8(ship_right)
+    rcall blit_8x8
+    subi  r16, -8                        ; advance x by 8
+    dec   r21
+    brne  rl_loop
+rl_done:
+    ret
+
+; ============================================================================
 ; render_score: render the 16-bit score as 5 fixed-width digits at the
 ; top-right corner of page 0. Each digit at +6 cols → 30 cols wide
 ; starting at col 98 (= 128 - 30). Uses repeated subtraction for the
@@ -728,8 +762,11 @@ render_score:
     push  r3
     lds   r2, score_lo
     lds   r3, score_hi                   ; r3:r2 = score
-    ldi   r16, 96                        ; x cursor (digits 96/102/108/114/120;
-                                          ; last blit ends at col 127, in bounds)
+    ldi   r16, 99                        ; x cursor (digits 99/105/111/117/123;
+                                          ; LSD's data col 4 lands on col 127.
+                                          ; Last blit's padding cols 5-7 wrap
+                                          ; into fb page 1 cols 0-2 — but they
+                                          ; are 0x00 so the OR is a no-op.)
     ; Digit 0: ten-thousands
     ldi   r24, lo8(10000)
     ldi   r25, hi8(10000)
