@@ -794,22 +794,33 @@ cc_proj_loop_done:
 
 ; cc_handle_hit: a beam has just landed on the entity at Y. Decide what to
 ; do with the slot:
-;   * carrying Lander (TYPE_LANDER, byte 0 bit 0 = 1) → re-stamp slot in
-;     place as a falling Humanoid; the released humanoid drifts back down
-;     and lands safely on the ground.
-;   * anything else (Lander empty-handed, Humanoid grounded, falling
-;     Humanoid) → just deactivate the slot.
-; Y is preserved across the call.
+;   * carrying Lander, beam in upper half [y, y+7]    → free humanoid (slot
+;     becomes a falling humanoid; the lander dies)
+;   * carrying Lander, beam in lower half [y+8, y+15] → kill BOTH (the
+;     humanoid was the one shot; the lander goes down with it)
+;   * anything else (empty Lander, grounded Humanoid, falling Humanoid)
+;                                                     → just deactivate
+;
+; Reads r17 (beam_y, set up at the start of cc_proj_loop and preserved
+; through cc_ent_loop). Y is preserved across the call.
 cc_handle_hit:
     ld    r25, Y
     sbrs  r25, 0
-    rjmp  chh_kill                       ; bit 0 clear → not carrying anything
+    rjmp  chh_kill                       ; bit 0 clear → not a carrying lander
     mov   r27, r25
     swap  r27
     andi  r27, 0x07
     cpi   r27, TYPE_LANDER
-    brne  chh_kill                       ; falling humanoid bit 0=1 — kill it
-    ; Re-stamp slot in place: active | TYPE_HUMANOID | falling=1.
+    brne  chh_kill                       ; falling humanoid (HUMANOID + bit 0)
+    ; Carrying Lander hit. If the beam was in the lower 8 rows, the
+    ; humanoid took the shot — kill both. Otherwise, free the humanoid.
+    ldd   r26, Y+2
+    andi  r26, 0x3F                      ; entity_y
+    mov   r27, r17                       ; beam_y
+    sub   r27, r26                       ; r27 = beam_y - entity_y
+    cpi   r27, 8
+    brsh  chh_kill                       ; lower half → kill both
+    ; Upper half — free the humanoid as a falling one.
     ldi   r25, 0x80 | (TYPE_HUMANOID << 4) | 0x01
     st    Y, r25
     ret

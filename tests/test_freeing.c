@@ -84,21 +84,20 @@ static void test_shoot_carrier_top_frees_humanoid(void) {
                   slot_y(0));
 }
 
-// ---- 1b. Shooting the dangling humanoid (lower half) also frees it.
-//         Bbox for a carrying Lander is 16 rows tall so the visible
-//         humanoid sprite at lander_y+8 is also a valid hit zone. ----
-static void test_shoot_carrier_dangling_humanoid_frees(void) {
+// ---- 1b. Shooting the dangling humanoid (lower half) KILLS BOTH —
+//         the humanoid takes the bullet and the Lander goes down with it.
+//         Distinct from shooting the Lander (top half), which frees the
+//         humanoid as a falling one. ----
+static void test_shoot_dangling_humanoid_kills_both(void) {
     scenario_only();
     place_lander_carrying(0, 80, 20);
-    // Beam at y=30, which is in the LOWER half of the extended bbox
-    // (rows 28..35) — i.e., aimed at the visible humanoid hanging below
-    // the lander.
+    // Beam at y=30, in the LOWER half of the 16-row carrying-Lander bbox
+    // (rows 28..35) — i.e., aimed at the visible humanoid below the lander.
     sim_place_beam(S, 0, 76, 30, 0);
     sim_run_frame(S);
-    SIM_CHECK_MSG(slot_active(0),
-                  "expected hit on dangling humanoid to transform slot");
-    SIM_CHECK_MSG(slot_type(0) == TYPE_HUMANOID && slot_falling(0),
-                  "expected freed falling humanoid; byte0=0x%02X", slot_byte0(0));
+    SIM_CHECK_MSG(!slot_active(0),
+                  "expected both lander and humanoid killed; byte0=0x%02X",
+                  slot_byte0(0));
 }
 
 // ---- 1c. Empty-handed Lander still has 8-row bbox (not extended). ----
@@ -186,7 +185,7 @@ int main(int argc, char **argv) {
     S = sim_boot(argv[1]);
 
     test_shoot_carrier_top_frees_humanoid();
-    test_shoot_carrier_dangling_humanoid_frees();
+    test_shoot_dangling_humanoid_kills_both();
     test_empty_lander_8row_bbox();
     test_shoot_empty_lander_just_kills();
     test_shoot_grounded_humanoid();
