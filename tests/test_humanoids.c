@@ -70,20 +70,19 @@ static void test_humanoids_dont_drift(void) {
     }
 }
 
-// ---- 3. Beam fired through humanoid does NOT deactivate it. ----
-static void test_beam_passes_through_humanoid(void) {
+// ---- 3. Beam aimed at a humanoid kills it (Phase 2.5: humanoids are
+//        vulnerable, not invulnerable). ----
+static void test_beam_kills_humanoid(void) {
     sim_sync(S);
-    // Park ship facing right at sprite_y=44 so beam_y=48 lines up with humanoids.
-    sim_clear_state_minimal(S);                  // clears entities + projectiles
-    // Re-place a humanoid for the test
+    sim_clear_state_minimal(S);
     sim_mem_w(S, S->sym_entities + 1*3 + 0, (1<<7) | (TYPE_HUMANOID<<4));
-    sim_mem_w(S, S->sym_entities + 1*3 + 1, 80);    // world_x = 80
-    sim_mem_w(S, S->sym_entities + 1*3 + 2, 48);    // y = 48
+    sim_mem_w(S, S->sym_entities + 1*3 + 1, 80);
+    sim_mem_w(S, S->sym_entities + 1*3 + 2, 48);
     sim_set_ship(S, 44, 0, 0);
-    sim_place_beam(S, 0, 76, 48, 0);                // beam y=48, just left of humanoid
+    sim_place_beam(S, 0, 76, 48, 0);
     sim_run_frame(S);
-    SIM_CHECK_MSG(slot_active(1),
-                  "BUG: humanoid was killed by beam (slot 1 byte0=0x%02X)",
+    SIM_CHECK_MSG(!slot_active(1),
+                  "humanoid should be killed by direct beam hit; byte0=0x%02X",
                   sim_mem_r(S, S->sym_entities + 3));
 }
 
@@ -107,7 +106,7 @@ int main(int argc, char **argv) {
 
     test_initial_layout();
     test_humanoids_dont_drift();
-    test_beam_passes_through_humanoid();
+    test_beam_kills_humanoid();
     test_ship_does_not_die_on_humanoid_contact();
 
     sim_coverage_save_for(argv[0]);

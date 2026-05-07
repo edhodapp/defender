@@ -723,13 +723,16 @@ cc_ent_loop:
     ld    r25, Y
     sbrs  r25, 7
     rjmp  cc_ent_next
-    ; Type check
+    ; Type check — beam can hit Landers and Humanoids.
     mov   r26, r25
     swap  r26
     andi  r26, 0x07
     cpi   r26, TYPE_LANDER
+    breq  cc_ent_typed
+    cpi   r26, TYPE_HUMANOID
     brne  cc_ent_next
-    ; Lander screen_x = world_x - scroll
+cc_ent_typed:
+    ; screen_x = world_x - scroll
     ldd   r26, Y+1
     lds   r27, scroll_offset
     sub   r26, r27
@@ -742,7 +745,7 @@ cc_ent_loop:
     subi  r27, -8
     cp    r16, r27
     brsh  cc_ent_next
-    ; beam_y in [lander_y, lander_y+7]?
+    ; beam_y in [entity_y, entity_y+7]?
     ldd   r25, Y+2
     andi  r25, 0x3F
     cp    r17, r25
@@ -751,9 +754,9 @@ cc_ent_loop:
     subi  r27, -8
     cp    r17, r27
     brsh  cc_ent_next
-    ; HIT — deactivate Lander, deactivate beam, queue SFX_HIT for main_loop.
-    clr   r25
-    st    Y, r25
+    ; HIT — disposition handled in a small subroutine to keep this loop
+    ; body short enough that brXX targets to cc_ent_next stay in 7-bit range.
+    rcall cc_handle_hit
     pop   r18
     pop   r29
     pop   r28
@@ -773,6 +776,32 @@ cc_proj_next:
     adiw  r28, PROJ_SIZE
     dec   r18
     brne  cc_proj_loop
+    ret
+
+; cc_handle_hit: a beam has just landed on the entity at Y. Decide what to
+; do with the slot:
+;   * carrying Lander (TYPE_LANDER, byte 0 bit 0 = 1) → re-stamp slot in
+;     place as a falling Humanoid; the released humanoid drifts back down
+;     and lands safely on the ground.
+;   * anything else (Lander empty-handed, Humanoid grounded, falling
+;     Humanoid) → just deactivate the slot.
+; Y is preserved across the call.
+cc_handle_hit:
+    ld    r25, Y
+    sbrs  r25, 0
+    rjmp  chh_kill                       ; bit 0 clear → not carrying anything
+    mov   r27, r25
+    swap  r27
+    andi  r27, 0x07
+    cpi   r27, TYPE_LANDER
+    brne  chh_kill                       ; falling humanoid bit 0=1 — kill it
+    ; Re-stamp slot in place: active | TYPE_HUMANOID | falling=1.
+    ldi   r25, 0x80 | (TYPE_HUMANOID << 4) | 0x01
+    st    Y, r25
+    ret
+chh_kill:
+    clr   r25
+    st    Y, r25
     ret
 
 ; ============================================================================
@@ -904,9 +933,40 @@ update_dispatch:
     rjmp  update_noop                    ; type 4 = (Pod)
     rjmp  update_noop                    ; type 5 = (Swarmer)
     rjmp  update_noop                    ; type 6 = (Baiter)
-    rjmp  update_noop                    ; type 7 = (Humanoid)
+    rjmp  update_humanoid                ; type 7 = Humanoid
 
 update_noop:
+    ret
+
+; Humanoid update — usually a no-op. If byte 0 bit 0 is set, the humanoid is
+; "falling" (was just freed from a shot Lander) and descends 1 row per 4
+; frames until it touches the ground at y = 48; on landing the falling bit
+; is cleared and the humanoid resumes normal grounded behavior.
+; Y points at the slot's byte 0 on entry; preserved on return.
+update_humanoid:
+    ld    r24, Y
+    sbrs  r24, 0
+    ret                                  ; not falling — nothing to do
+    lds   r25, frame_counter
+    andi  r25, 0x03
+    brne  uh_done                        ; not a drift frame
+    ldd   r25, Y+2
+    mov   r24, r25
+    andi  r24, 0xC0                      ; preserve state2
+    andi  r25, 0x3F                      ; isolate y
+    cpi   r25, 48
+    brsh  uh_at_ground                   ; already at ground — just clear bit
+    inc   r25
+    or    r25, r24
+    std   Y+2, r25
+    andi  r25, 0x3F
+    cpi   r25, 48
+    brlo  uh_done                        ; still falling
+uh_at_ground:
+    ld    r24, Y
+    andi  r24, 0xFE
+    st    Y, r24
+uh_done:
     ret
 
 ; Lander update — descend to humanoid altitude, hover on its head, pause,
