@@ -69,7 +69,8 @@ static void boot(const char *elf_path) {
     a_death_flash    = sym("death_flash");
     a_ship_facing    = sym("ship_facing");
 
-    // Run a few frames to clear _reset and let main_loop stabilize.
+    // Set the test-mode skip-title flag so _reset bypasses the splash UI.
+    g_avr->data[sym("skip_title_flag")] = 1;
     run_cycles(2 * FRAME_CYCLES);
 }
 

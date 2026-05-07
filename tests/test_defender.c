@@ -295,6 +295,15 @@ int main(int argc, char **argv) {
 
     int rc = 0;
 
+    // Set the test-mode skip-title flag so _reset bypasses the splash UI.
+    avr_symbol_t **sym_arr = fw.symbol;
+    for (uint32_t i = 0; i < fw.symbolcount; i++) {
+        if (strcmp(sym_arr[i]->symbol, "skip_title_flag") == 0) {
+            avr->data[sym_arr[i]->addr & 0xFFFF] = 1;
+            break;
+        }
+    }
+
     // Phase 1: idle. Ship at (60,28) facing right, scroll=0, no projectile.
     if (run_until_data(avr, &display, 1024) == cpu_Crashed) {
         fprintf(stderr, "FAIL: cpu_Crashed before frame 1\n"); return 1;

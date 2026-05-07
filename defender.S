@@ -49,6 +49,17 @@ enemies_alive:  .skip 1
 .global difficulty
 difficulty:     .skip 1
 
+; Title-screen edge-detect buffer for input_read returns.
+.global prev_buttons
+prev_buttons:   .skip 1
+
+; Test-only override: when non-zero (set via sim_mem_w before _reset runs),
+; the title screen is skipped regardless of B button state. Lets the test
+; harness avoid the splash UI without depending on simavr's port-IRQ /
+; pull-up interaction at the very first cycles after reset.
+.global skip_title_flag
+skip_title_flag: .skip 1
+
 ; 64 entity slots, 3 bytes each. Packed layout:
 ;   byte 0: bit 7   = active
 ;           bits 4-6 = type (0..7)
@@ -210,8 +221,24 @@ hum_init_loop:
 
     sei                                    ; arm interrupts last
 
-    ; Boot jingle — short ascending arpeggio. Plays once during the first
-    ; few main_loop iterations.
+    ; Splash screen — pick difficulty. Test harness can set skip_title_flag
+    ; via sim_mem_w before warmup; on hardware, holding B at boot also
+    ; bypasses for a quick-start (default difficulty stays MED).
+    lds   r24, skip_title_flag
+    cpi   r24, 0
+    brne  skip_title_screen
+    in    r24, _SFR_IO_ADDR(PINB)
+    sbrc  r24, 4                           ; B held = bit 4 clear
+    rcall title_loop                       ; B not held → show title
+skip_title_screen:
+    ; Re-derive wave 1 size from the chosen difficulty (boot Lander
+    ; counts as 1, subtract from table value).
+    rcall lookup_wave_size
+    dec   r24
+    sts   wave_to_spawn, r24
+
+    ; Boot jingle — short ascending arpeggio. Plays during the first
+    ; few main_loop iterations after the title is dismissed.
     ldi   r24, 5                           ; SFX_START
     rcall audio_play
 
@@ -778,6 +805,134 @@ draw_pixel:
 ;
 ; Clobbers: r18, r24, r25, Y
 ; ============================================================================
+
+; blit_letter: blit font_table[r24] at (r16, r17). Advances r16 by 8 so
+; sequential calls render a string left to right. Clobbers blit_8x8's
+; clobber set + Z; preserves r16/r17 (with r16 advanced).
+blit_letter:
+    push  r16
+    push  r17
+    mov   r30, r24
+    ldi   r31, 0
+    lsl   r30
+    rol   r31
+    lsl   r30
+    rol   r31
+    lsl   r30
+    rol   r31
+    subi  r30, lo8(-(font_table))
+    sbci  r31, hi8(-(font_table))
+    rcall blit_8x8
+    pop   r17
+    pop   r16
+    subi  r16, -8                          ; advance x by 8
+    ret
+
+; render_title: clear-then-paint of the splash screen.
+;   Row  8-15: "DEFENDER" centered (cols 32..95)
+;   Row 24-31: "LOW"  at col 52
+;   Row 32-39: "MED"  at col 52
+;   Row 40-47: "HIGH" at col 48
+;   Selector arrow at col 44, y = 24 + difficulty*8.
+render_title:
+    rcall clear_fb
+    ldi   r16, 32
+    ldi   r17, 8
+    ldi   r24, 0
+    rcall blit_letter
+    ldi   r24, 1
+    rcall blit_letter
+    ldi   r24, 2
+    rcall blit_letter
+    ldi   r24, 1
+    rcall blit_letter
+    ldi   r24, 3
+    rcall blit_letter
+    ldi   r24, 0
+    rcall blit_letter
+    ldi   r24, 1
+    rcall blit_letter
+    ldi   r24, 4
+    rcall blit_letter
+    ldi   r16, 52
+    ldi   r17, 24
+    ldi   r24, 5
+    rcall blit_letter
+    ldi   r24, 6
+    rcall blit_letter
+    ldi   r24, 7
+    rcall blit_letter
+    ldi   r16, 52
+    ldi   r17, 32
+    ldi   r24, 8
+    rcall blit_letter
+    ldi   r24, 1
+    rcall blit_letter
+    ldi   r24, 0
+    rcall blit_letter
+    ldi   r16, 48
+    ldi   r17, 40
+    ldi   r24, 9
+    rcall blit_letter
+    ldi   r24, 10
+    rcall blit_letter
+    ldi   r24, 11
+    rcall blit_letter
+    ldi   r24, 9
+    rcall blit_letter
+    ; Arrow at (44, 24 + difficulty*8)
+    ldi   r16, 44
+    lds   r24, difficulty
+    lsl   r24
+    lsl   r24
+    lsl   r24
+    subi  r24, -24                         ; r24 = 24 + difficulty*8
+    mov   r17, r24
+    ldi   r24, 12
+    rcall blit_letter
+    ret
+
+; title_loop: render the splash screen, edge-detect UP/DOWN/B button
+; presses to choose difficulty, exit on B. Sleep-paced via Timer1 like
+; main_loop. Returns once the player confirms.
+title_loop:
+    clr   r24
+    sts   prev_buttons, r24
+title_frame:
+    rcall render_title
+    rcall oled_render
+    rcall input_read                       ; r24 = current pressed mask
+    lds   r17, prev_buttons
+    sts   prev_buttons, r24
+    com   r17                              ; r17 = ~prev
+    and   r17, r24                         ; r17 = newly-pressed bits
+    sbrs  r17, 0                           ; UP press? (bit 0)
+    rjmp  title_no_up
+    lds   r25, difficulty
+    cpi   r25, 0
+    breq  title_no_up
+    dec   r25
+    sts   difficulty, r25
+title_no_up:
+    sbrs  r17, 1                           ; DOWN press?
+    rjmp  title_no_down
+    lds   r25, difficulty
+    cpi   r25, 2
+    brsh  title_no_down
+    inc   r25
+    sts   difficulty, r25
+title_no_down:
+    sbrs  r17, 5                           ; B press → confirm
+    rjmp  title_wait
+    ret
+title_wait:
+    sleep
+    lds   r25, frame_ready
+    cpi   r25, 0
+    breq  title_wait
+    clr   r25
+    sts   frame_ready, r25
+    rjmp  title_frame
 
 ; lookup_wave_size: returns r24 = wave_sizes_table[difficulty][min(wave_number-1, 7)].
 ; Reads wave_number and difficulty; uses Z. Clobbers r24, r25, Z.
@@ -1653,6 +1808,28 @@ wave_sizes_table:
     .byte  5,  7,  8,  9, 10, 12, 12, 12      ; LOW  (gentle)
     .byte 10, 13, 14, 16, 18, 20, 20, 20      ; MED  (moderate)
     .byte 15, 20, 20, 20, 20, 20, 20, 20      ; HIGH (Defenduino-equivalent)
+    .balign 2
+
+; ============================================================================
+; 8x8 letter sprites for the title screen. Indexed by font index:
+;   0=D 1=E 2=F 3=N 4=R 5=L 6=O 7=W 8=M 9=H 10=I 11=G 12=ARROW
+; Each letter occupies the leftmost 5 cols; cols 5-7 are zero padding so
+; consecutive blits at +8 px look like inter-letter spacing.
+; ============================================================================
+font_table:
+    .byte 0x7F, 0x41, 0x41, 0x41, 0x3E, 0x00, 0x00, 0x00   ; D
+    .byte 0x7F, 0x49, 0x49, 0x49, 0x41, 0x00, 0x00, 0x00   ; E
+    .byte 0x7F, 0x09, 0x09, 0x09, 0x01, 0x00, 0x00, 0x00   ; F
+    .byte 0x7F, 0x02, 0x04, 0x08, 0x7F, 0x00, 0x00, 0x00   ; N
+    .byte 0x7F, 0x09, 0x19, 0x29, 0x46, 0x00, 0x00, 0x00   ; R
+    .byte 0x7F, 0x40, 0x40, 0x40, 0x40, 0x00, 0x00, 0x00   ; L
+    .byte 0x3E, 0x41, 0x41, 0x41, 0x3E, 0x00, 0x00, 0x00   ; O
+    .byte 0x7F, 0x20, 0x18, 0x20, 0x7F, 0x00, 0x00, 0x00   ; W
+    .byte 0x7F, 0x02, 0x04, 0x02, 0x7F, 0x00, 0x00, 0x00   ; M
+    .byte 0x7F, 0x08, 0x08, 0x08, 0x7F, 0x00, 0x00, 0x00   ; H
+    .byte 0x41, 0x41, 0x7F, 0x41, 0x41, 0x00, 0x00, 0x00   ; I
+    .byte 0x3E, 0x41, 0x49, 0x49, 0x3A, 0x00, 0x00, 0x00   ; G
+    .byte 0x00, 0x7F, 0x3E, 0x1C, 0x08, 0x00, 0x00, 0x00   ; ARROW (>)
     .balign 2
 
 ; ============================================================================

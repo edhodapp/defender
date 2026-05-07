@@ -88,6 +88,8 @@ sim_t *sim_boot(const char *elf_path) {
     s->sym_wave_number    = sim_lookup(s, "wave_number");
     s->sym_wave_to_spawn  = sim_lookup(s, "wave_to_spawn");
     s->sym_enemies_alive  = sim_lookup(s, "enemies_alive");
+    s->sym_difficulty     = sim_lookup(s, "difficulty");
+    s->sym_skip_title_flag = sim_lookup(s, "skip_title_flag");
     s->sym_projectiles    = sim_lookup(s, "projectiles");
     s->sym_entities       = sim_lookup(s, "entities");
     s->sym_framebuffer    = sim_lookup(s, "framebuffer");
@@ -100,8 +102,11 @@ sim_t *sim_boot(const char *elf_path) {
     s->btn_a     = btn_irq(s->avr, 'E', 6);
     s->btn_b     = btn_irq(s->avr, 'B', 4);
 
-    // Run a couple of frames so _reset finishes and main_loop reaches its
-    // steady-state delay loop.
+    // Set the test-mode skip-title flag before any of _reset runs. The
+    // firmware checks this at the start of the title path and bypasses
+    // the splash UI if non-zero. Also reliable in sim where the IRQ-port
+    // pull-up timing can mask a held B.
+    sim_mem_w(s, s->sym_skip_title_flag, 1);
     sim_run_cycles(s, 2 * SIM_FRAME_CYCLES);
     return s;
 }
