@@ -45,6 +45,10 @@ wave_to_spawn:  .skip 1
 .global enemies_alive
 enemies_alive:  .skip 1
 
+; Difficulty (0=LOW, 1=MED, 2=HIGH). Wave sizes scale via wave_sizes_table.
+.global difficulty
+difficulty:     .skip 1
+
 ; 64 entity slots, 3 bytes each. Packed layout:
 ;   byte 0: bit 7   = active
 ;           bits 4-6 = type (0..7)
@@ -158,11 +162,14 @@ _reset:
     ldi   r24, 10
     sts   entities + 2, r24                ; y (state2 = 0)
 
-    ; Wave 1 setup: 1 boot Lander already alive, 2 more to spawn.
+    ; Wave 1 setup: 1 boot Lander already alive; the rest derive from
+    ; wave_sizes_table[difficulty][0]. Default difficulty = MED.
     ldi   r24, 1
     sts   wave_number, r24
     sts   enemies_alive, r24
-    ldi   r24, 2
+    sts   difficulty, r24                  ; 1 = MED
+    rcall lookup_wave_size                 ; r24 = wave 1 size for current difficulty
+    dec   r24                              ; subtract the boot Lander
     sts   wave_to_spawn, r24
 
     ; Spawn 8 Humanoids on the ground (slots 1..8) at world_x = 16, 48, 80, ...
@@ -379,20 +386,16 @@ no_pending_sfx:
     lds   r24, enemies_alive
     cpi   r24, 0
     brne  wave_in_progress
-    ; Wave done. Increment wave_number (cap at 6).
+    ; Wave done. Increment wave_number (cap at 8 since the table has only 8
+    ; rows; values clamp anyway via lookup_wave_size's index cap).
     lds   r24, wave_number
-    cpi   r24, 6
+    cpi   r24, 8
     brsh  wave_at_max
     inc   r24
     sts   wave_number, r24
 wave_at_max:
-    ; wave_to_spawn = min(wave_number + 2, 8)
-    lds   r24, wave_number
-    subi  r24, -2                        ; r24 = wave_number + 2
-    cpi   r24, 9
-    brlo  wave_size_ok
-    ldi   r24, 8
-wave_size_ok:
+    ; New wave_to_spawn from the difficulty table.
+    rcall lookup_wave_size
     sts   wave_to_spawn, r24
     ldi   r24, 6                         ; SFX_WAVE_CHANGE
     rcall audio_play
@@ -775,6 +778,33 @@ draw_pixel:
 ;
 ; Clobbers: r18, r24, r25, Y
 ; ============================================================================
+
+; lookup_wave_size: returns r24 = wave_sizes_table[difficulty][min(wave_number-1, 7)].
+; Reads wave_number and difficulty; uses Z. Clobbers r24, r25, Z.
+lookup_wave_size:
+    lds   r25, wave_number
+    cpi   r25, 0
+    brne  lws_have_wave
+    ldi   r25, 1
+lws_have_wave:
+    dec   r25                              ; r25 = wave_number - 1
+    cpi   r25, 8
+    brlo  lws_clamped
+    ldi   r25, 7                           ; cap at index 7
+lws_clamped:
+    lds   r24, difficulty
+    lsl   r24
+    lsl   r24
+    lsl   r24                              ; r24 = difficulty * 8
+    add   r24, r25                         ; offset within table
+    ldi   r30, lo8(wave_sizes_table)
+    ldi   r31, hi8(wave_sizes_table)
+    add   r30, r24
+    ldi   r24, 0
+    adc   r31, r24
+    lpm   r24, Z
+    ret
+
 try_spawn_lander:
     ; Wave gate: skip if the wave has no more attackers to spawn.
     lds   r24, wave_to_spawn
@@ -1612,6 +1642,17 @@ humanoid_sprite:
 ;     .X....X.   row 7
 mutant_sprite:
     .byte 0x45, 0xAE, 0x1F, 0x7A, 0x7A, 0x1F, 0xAE, 0x45
+    .balign 2
+
+; ============================================================================
+; wave_sizes_table — total Lander spawns per (difficulty, wave). 8 columns
+; indexed by min(wave_number-1, 7); 3 rows for LOW / MED / HIGH.
+; HIGH row matches Defenduino (15 wave 1, 20 thereafter).
+; ============================================================================
+wave_sizes_table:
+    .byte  5,  7,  8,  9, 10, 12, 12, 12      ; LOW  (gentle)
+    .byte 10, 13, 14, 16, 18, 20, 20, 20      ; MED  (moderate)
+    .byte 15, 20, 20, 20, 20, 20, 20, 20      ; HIGH (Defenduino-equivalent)
     .balign 2
 
 ; ============================================================================

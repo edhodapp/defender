@@ -56,11 +56,11 @@ static void place_humanoid(int slot, int world_x, int y) {
     sim_mem_w(S, S->sym_entities + slot*3 + 2, y);
 }
 
-// ---- 1. Initial wave state ----
+// ---- 1. Initial wave state — default MED, table[MED][0]=10, minus 1 boot Lander = 9 ----
 static void test_initial_state(void) {
     sim_sync(S);
     SIM_CHECK_MSG(wave_number() == 1, "wave_number=%d (want 1)", wave_number());
-    SIM_CHECK_MSG(wave_to_spawn() == 2, "wave_to_spawn=%d (want 2)", wave_to_spawn());
+    SIM_CHECK_MSG(wave_to_spawn() == 9, "wave_to_spawn=%d (want 9)", wave_to_spawn());
     SIM_CHECK_MSG(enemies_alive() == 1, "enemies_alive=%d (want 1)", enemies_alive());
 }
 
@@ -186,10 +186,9 @@ static void test_wave_end_advances_and_plays_sfx(void) {
     sim_run_frame(S);                            // wave-end check fires
     SIM_CHECK_MSG(wave_number() == 2,
                   "wave_number should advance to 2; got %d", wave_number());
-    // wave_to_spawn = (wave_number+2) - 1 because wave-end also kicks an
-    // immediate try_spawn_lander to avoid a multi-second silent gap.
-    SIM_CHECK_MSG(wave_to_spawn() == 3,
-                  "next-wave size after immediate spawn = 3; got %d", wave_to_spawn());
+    // table[MED][1] = 13, immediate spawn consumes 1 → wave_to_spawn = 12.
+    SIM_CHECK_MSG(wave_to_spawn() == 12,
+                  "next-wave size = table[MED][1]-1 = 12; got %d", wave_to_spawn());
     SIM_CHECK_MSG(enemies_alive() == 1,
                   "immediate spawn should bring enemies_alive to 1; got %d",
                   enemies_alive());
@@ -198,18 +197,19 @@ static void test_wave_end_advances_and_plays_sfx(void) {
                   sim_mem_r(S, S->sym_sound_id));
 }
 
-// ---- 11. Wave-end caps wave_number at 6 and wave_to_spawn at 8 ----
+// ---- 11. Wave-end caps wave_number at 8 (table has 8 rows); wave 8+ uses
+//          table[difficulty][7]. Default MED → 20; minus 1 immediate = 19. ----
 static void test_wave_end_caps(void) {
     sim_sync(S);
     sim_clear_state_minimal(S);
-    sim_mem_w(S, S->sym_wave_number, 6);          // already at cap
+    sim_mem_w(S, S->sym_wave_number, 8);
     sim_mem_w(S, S->sym_wave_to_spawn, 0);
     sim_mem_w(S, S->sym_enemies_alive, 0);
     sim_run_frame(S);
-    SIM_CHECK_MSG(wave_number() == 6,
-                  "wave_number should stay at cap 6; got %d", wave_number());
-    SIM_CHECK_MSG(wave_to_spawn() == 7,
-                  "wave_to_spawn after cap+immediate-spawn = 8-1 = 7; got %d",
+    SIM_CHECK_MSG(wave_number() == 8,
+                  "wave_number should stay at cap 8; got %d", wave_number());
+    SIM_CHECK_MSG(wave_to_spawn() == 19,
+                  "MED wave 8+ = table[1][7]=20, minus 1 immediate = 19; got %d",
                   wave_to_spawn());
 }
 
