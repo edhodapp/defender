@@ -186,8 +186,13 @@ static void test_wave_end_advances_and_plays_sfx(void) {
     sim_run_frame(S);                            // wave-end check fires
     SIM_CHECK_MSG(wave_number() == 2,
                   "wave_number should advance to 2; got %d", wave_number());
-    SIM_CHECK_MSG(wave_to_spawn() == 4,
-                  "next-wave size = wave_number+2 = 4; got %d", wave_to_spawn());
+    // wave_to_spawn = (wave_number+2) - 1 because wave-end also kicks an
+    // immediate try_spawn_lander to avoid a multi-second silent gap.
+    SIM_CHECK_MSG(wave_to_spawn() == 3,
+                  "next-wave size after immediate spawn = 3; got %d", wave_to_spawn());
+    SIM_CHECK_MSG(enemies_alive() == 1,
+                  "immediate spawn should bring enemies_alive to 1; got %d",
+                  enemies_alive());
     SIM_CHECK_MSG(sim_mem_r(S, S->sym_sound_id) == SFX_WAVE,
                   "SFX_WAVE_CHANGE should be queued; sound_id=%d",
                   sim_mem_r(S, S->sym_sound_id));
@@ -203,8 +208,9 @@ static void test_wave_end_caps(void) {
     sim_run_frame(S);
     SIM_CHECK_MSG(wave_number() == 6,
                   "wave_number should stay at cap 6; got %d", wave_number());
-    SIM_CHECK_MSG(wave_to_spawn() == 8,
-                  "wave_to_spawn should cap at 8; got %d", wave_to_spawn());
+    SIM_CHECK_MSG(wave_to_spawn() == 7,
+                  "wave_to_spawn after cap+immediate-spawn = 8-1 = 7; got %d",
+                  wave_to_spawn());
 }
 
 int main(int argc, char **argv) {

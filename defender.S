@@ -396,12 +396,16 @@ wave_size_ok:
     sts   wave_to_spawn, r24
     ldi   r24, 6                         ; SFX_WAVE_CHANGE
     rcall audio_play
+    ; Kick the new wave: spawn one immediately so the player sees a fresh
+    ; enemy without waiting for the next periodic fc==128 tick.
+    rcall try_spawn_lander
 wave_in_progress:
 
     ; --- Render this frame ---
     rcall clear_fb
     rcall render_horizon
     rcall render_radar
+    rcall render_wave_indicator
     rcall render_projectiles
     rcall render_entities
 
@@ -620,6 +624,27 @@ rr_ent_next:
     adiw  r28, ENTITY_SIZE
     dec   r18
     brne  rr_ent_loop
+    ret
+
+; ============================================================================
+; render_wave_indicator: draw N pixels at framebuffer page 0 cols 0..N-1,
+; row 0, where N = wave_number. Sits in the otherwise-blank left margin
+; outside the radar bar's [32, 95] cols. Clobbers: r24, r25, Z.
+; ============================================================================
+render_wave_indicator:
+    lds   r24, wave_number
+    cpi   r24, 0
+    breq  rwi_done
+    ldi   r30, lo8(framebuffer)
+    ldi   r31, hi8(framebuffer)
+    ldi   r25, 0x01                      ; bit 0 = top row of page 0
+rwi_loop:
+    ld    r0, Z
+    or    r0, r25
+    st    Z+, r0
+    dec   r24
+    brne  rwi_loop
+rwi_done:
     ret
 
 ; ============================================================================

@@ -75,9 +75,16 @@ static uint8_t expected_mountain_byte(int fb_col, uint8_t scroll) {
     return mask_table[height_table[(uint8_t)(scroll + fb_col)]];
 }
 
+// In the integration test we run with default boot wave_number=1 → 1 dot
+// at fb col 0 page 0 row 0.
+#define TEST_WAVE_DOTS 1
+
 static uint8_t expected_radar_byte(int fb_col, uint8_t scroll, int sprite_y,
                                    int lander_world_x, int lander_y) {
-    if (fb_col < 32 || fb_col >= 96) return 0;
+    if (fb_col < 32 || fb_col >= 96) {
+        if (fb_col < TEST_WAVE_DOTS) return 0x01;          // wave indicator
+        return 0;
+    }
     int radar_col = fb_col - 32;
     uint8_t b = 0x81;                                       // borders
     if (height_table[radar_col * 4] >= 4) b |= 0x40;        // mountain dot
