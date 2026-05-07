@@ -907,6 +907,8 @@ title_loop:
     sts   prev_buttons, r24
 title_frame:
     rcall render_title
+    ldi   r30, lo8(framebuffer)
+    ldi   r31, hi8(framebuffer)
     rcall oled_render
     rcall input_read                       ; r24 = current pressed mask
     lds   r17, prev_buttons
