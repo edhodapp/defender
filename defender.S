@@ -45,6 +45,14 @@ wave_to_spawn:  .skip 1
 .global enemies_alive
 enemies_alive:  .skip 1
 
+; 16-bit score, low byte first (little-endian). 100 points per
+; Lander/Mutant kill. Wraps at 65535 — game-over score management is a
+; later concern.
+.global score_lo
+score_lo:       .skip 1
+.global score_hi
+score_hi:       .skip 1
+
 ; Difficulty (0=LOW, 1=MED, 2=HIGH). Wave sizes scale via wave_sizes_table.
 .global difficulty
 difficulty:     .skip 1
@@ -189,6 +197,10 @@ _reset:
     rcall lookup_wave_size                 ; r24 = wave 1 size for current difficulty
     dec   r24                              ; subtract the boot Lander
     sts   wave_to_spawn, r24
+    ; Score starts at 0.
+    clr   r24
+    sts   score_lo, r24
+    sts   score_hi, r24
 
     ; Spawn 8 Humanoids on the ground (slots 1..8) at world_x = 16, 48, 80, ...
     ldi   r28, lo8(entities + 1*ENTITY_SIZE)
@@ -443,6 +455,7 @@ wave_in_progress:
     rcall render_horizon
     rcall render_radar
     rcall render_wave_indicator
+    rcall render_score
     rcall render_projectiles
     rcall render_entities
 
@@ -664,24 +677,113 @@ rr_ent_next:
     ret
 
 ; ============================================================================
-; render_wave_indicator: draw N pixels at framebuffer page 0 cols 0..N-1,
-; row 0, where N = wave_number. Sits in the otherwise-blank left margin
-; outside the radar bar's [32, 95] cols. Clobbers: r24, r25, Z.
+; render_wave_indicator: render the wave number as a single 5x7 digit at
+; (0, 0) in the otherwise-empty top-left corner. Wave caps at 8 so a
+; single digit always fits. Clobbers blit_8x8's set + r24, r25, Z.
 ; ============================================================================
 render_wave_indicator:
     lds   r24, wave_number
-    cpi   r24, 0
-    breq  rwi_done
-    ldi   r30, lo8(framebuffer)
-    ldi   r31, hi8(framebuffer)
-    ldi   r25, 0x01                      ; bit 0 = top row of page 0
-rwi_loop:
-    ld    r0, Z
-    or    r0, r25
-    st    Z+, r0
-    dec   r24
-    brne  rwi_loop
+    cpi   r24, 1
+    brlo  rwi_done
+    cpi   r24, 10
+    brsh  rwi_done                       ; safety: > 9 → don't render
+    subi  r24, -(FONT_DIGIT_BASE)        ; r24 = 13 + wave_number
+    rcall blit_glyph_at_origin
 rwi_done:
+    ret
+
+; blit_glyph_at_origin: blit font_table[r24] at (0, 0). Helper used by
+; the wave indicator and the score (with the score caller adjusting
+; r16 between digit blits).
+; Inputs:  r24 = glyph index
+;          r16 = x  (caller-provided; this helper does not modify it)
+;          r17 = y
+; Clobbers: blit_8x8's clobber set + Z.
+blit_glyph:
+    ; offset = index * 8. Fits in one byte for our 23-glyph table.
+    lsl   r24
+    lsl   r24
+    lsl   r24
+    ldi   r30, lo8(font_table)
+    ldi   r31, hi8(font_table)
+    add   r30, r24
+    ldi   r24, 0
+    adc   r31, r24
+    rcall blit_8x8
+    ret
+
+blit_glyph_at_origin:
+    ldi   r16, 0
+    ldi   r17, 0
+    rjmp  blit_glyph
+
+; ============================================================================
+; render_score: render the 16-bit score as 5 fixed-width digits at the
+; top-right corner of page 0. Each digit at +6 cols → 30 cols wide
+; starting at col 98 (= 128 - 30). Uses repeated subtraction for the
+; per-digit decimal extraction (no AVR HW divide).
+; ============================================================================
+render_score:
+    push  r2
+    push  r3
+    lds   r2, score_lo
+    lds   r3, score_hi                   ; r3:r2 = score
+    ldi   r16, 96                        ; x cursor (digits 96/102/108/114/120;
+                                          ; last blit ends at col 127, in bounds)
+    ; Digit 0: ten-thousands
+    ldi   r24, lo8(10000)
+    ldi   r25, hi8(10000)
+    rcall rs_extract_digit
+    ; Digit 1: thousands
+    ldi   r24, lo8(1000)
+    ldi   r25, hi8(1000)
+    rcall rs_extract_digit
+    ; Digit 2: hundreds
+    ldi   r24, 100
+    ldi   r25, 0
+    rcall rs_extract_digit
+    ; Digit 3: tens
+    ldi   r24, 10
+    ldi   r25, 0
+    rcall rs_extract_digit
+    ; Digit 4: ones (just emit r2 as-is, since 0..9)
+    mov   r24, r2
+    subi  r24, -(FONT_DIGIT_BASE)
+    ldi   r17, 0
+    rcall blit_glyph
+    pop   r3
+    pop   r2
+    ret
+
+; rs_extract_digit: count how many times r25:r24 fits into r3:r2,
+; subtract from r3:r2, then blit that digit at (r16, 0) and advance r16.
+; r3:r2 is the running score remainder (caller-saved by render_score).
+rs_extract_digit:
+    ldi   r18, 0                         ; digit value
+red_loop:
+    cp    r2, r24
+    cpc   r3, r25
+    brlo  red_done                       ; remainder < power → done
+    sub   r2, r24
+    sbc   r3, r25
+    inc   r18
+    rjmp  red_loop
+red_done:
+    push  r2
+    push  r3
+    push  r16
+    push  r24
+    push  r25
+    mov   r24, r18
+    subi  r24, -(FONT_DIGIT_BASE)
+    ldi   r17, 0
+    rcall blit_glyph
+    pop   r25
+    pop   r24
+    pop   r16
+    pop   r3
+    pop   r2
+    subi  r16, -6                        ; advance x by 6 px
     ret
 
 ; ============================================================================
@@ -1170,6 +1272,13 @@ chh_dec_enemy:
     dec   r25
     sts   enemies_alive, r25
 chh_dec_done:
+    ; Award 100 points per Lander/Mutant kill (16-bit add to score).
+    lds   r24, score_lo
+    lds   r25, score_hi
+    subi  r24, lo8(-100)                 ; subi rd, -100 == add 100
+    sbci  r25, hi8(-100)
+    sts   score_lo, r24
+    sts   score_hi, r25
     ret
 
 ; ============================================================================
@@ -1826,20 +1935,33 @@ wave_sizes_table:
 ; consecutive blits at +8 px look like inter-letter spacing.
 ; ============================================================================
 font_table:
-    .byte 0x7F, 0x41, 0x41, 0x41, 0x3E, 0x00, 0x00, 0x00   ; D
-    .byte 0x7F, 0x49, 0x49, 0x49, 0x41, 0x00, 0x00, 0x00   ; E
-    .byte 0x7F, 0x09, 0x09, 0x09, 0x01, 0x00, 0x00, 0x00   ; F
-    .byte 0x7F, 0x02, 0x04, 0x08, 0x7F, 0x00, 0x00, 0x00   ; N
-    .byte 0x7F, 0x09, 0x19, 0x29, 0x46, 0x00, 0x00, 0x00   ; R
-    .byte 0x7F, 0x40, 0x40, 0x40, 0x40, 0x00, 0x00, 0x00   ; L
-    .byte 0x3E, 0x41, 0x41, 0x41, 0x3E, 0x00, 0x00, 0x00   ; O
-    .byte 0x7F, 0x20, 0x18, 0x20, 0x7F, 0x00, 0x00, 0x00   ; W
-    .byte 0x7F, 0x02, 0x04, 0x02, 0x7F, 0x00, 0x00, 0x00   ; M
-    .byte 0x7F, 0x08, 0x08, 0x08, 0x7F, 0x00, 0x00, 0x00   ; H
-    .byte 0x41, 0x41, 0x7F, 0x41, 0x41, 0x00, 0x00, 0x00   ; I
-    .byte 0x3E, 0x41, 0x49, 0x49, 0x3A, 0x00, 0x00, 0x00   ; G
-    .byte 0x00, 0x7F, 0x3E, 0x1C, 0x08, 0x00, 0x00, 0x00   ; ARROW (>)
+    .byte 0x7F, 0x41, 0x41, 0x41, 0x3E, 0x00, 0x00, 0x00   ;  0 D
+    .byte 0x7F, 0x49, 0x49, 0x49, 0x41, 0x00, 0x00, 0x00   ;  1 E
+    .byte 0x7F, 0x09, 0x09, 0x09, 0x01, 0x00, 0x00, 0x00   ;  2 F
+    .byte 0x7F, 0x02, 0x04, 0x08, 0x7F, 0x00, 0x00, 0x00   ;  3 N
+    .byte 0x7F, 0x09, 0x19, 0x29, 0x46, 0x00, 0x00, 0x00   ;  4 R
+    .byte 0x7F, 0x40, 0x40, 0x40, 0x40, 0x00, 0x00, 0x00   ;  5 L
+    .byte 0x3E, 0x41, 0x41, 0x41, 0x3E, 0x00, 0x00, 0x00   ;  6 O
+    .byte 0x7F, 0x20, 0x18, 0x20, 0x7F, 0x00, 0x00, 0x00   ;  7 W
+    .byte 0x7F, 0x02, 0x04, 0x02, 0x7F, 0x00, 0x00, 0x00   ;  8 M
+    .byte 0x7F, 0x08, 0x08, 0x08, 0x7F, 0x00, 0x00, 0x00   ;  9 H
+    .byte 0x41, 0x41, 0x7F, 0x41, 0x41, 0x00, 0x00, 0x00   ; 10 I
+    .byte 0x3E, 0x41, 0x49, 0x49, 0x3A, 0x00, 0x00, 0x00   ; 11 G
+    .byte 0x00, 0x7F, 0x3E, 0x1C, 0x08, 0x00, 0x00, 0x00   ; 12 ARROW (>)
+    ; Digits 0-9 at indices 13..22. Each is also a 5×7 glyph in 8 bytes.
+    .byte 0x3E, 0x49, 0x45, 0x43, 0x3E, 0x00, 0x00, 0x00   ; 13 '0' (slashed)
+    .byte 0x42, 0x7F, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00   ; 14 '1'
+    .byte 0x42, 0x61, 0x51, 0x49, 0x46, 0x00, 0x00, 0x00   ; 15 '2'
+    .byte 0x22, 0x49, 0x49, 0x49, 0x36, 0x00, 0x00, 0x00   ; 16 '3'
+    .byte 0x0F, 0x08, 0x08, 0x7F, 0x08, 0x00, 0x00, 0x00   ; 17 '4'
+    .byte 0x4F, 0x49, 0x49, 0x49, 0x31, 0x00, 0x00, 0x00   ; 18 '5'
+    .byte 0x3E, 0x49, 0x49, 0x49, 0x31, 0x00, 0x00, 0x00   ; 19 '6'
+    .byte 0x01, 0x01, 0x79, 0x05, 0x03, 0x00, 0x00, 0x00   ; 20 '7'
+    .byte 0x36, 0x49, 0x49, 0x49, 0x36, 0x00, 0x00, 0x00   ; 21 '8'
+    .byte 0x0E, 0x51, 0x51, 0x51, 0x7E, 0x00, 0x00, 0x00   ; 22 '9'
     .balign 2
+
+.equ FONT_DIGIT_BASE, 13                              ; index of '0' in font_table
 
 ; ============================================================================
 ; Ship sprites (per ship_shape.txt). Drawn in framebuffer-column order;

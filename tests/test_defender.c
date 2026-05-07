@@ -75,16 +75,13 @@ static uint8_t expected_mountain_byte(int fb_col, uint8_t scroll) {
     return mask_table[height_table[(uint8_t)(scroll + fb_col)]];
 }
 
-// In the integration test we run with default boot wave_number=1 → 1 dot
-// at fb col 0 page 0 row 0.
-#define TEST_WAVE_DOTS 1
-
+// expected_radar_byte covers only the radar bar's [32, 96) cols. The
+// wave-indicator digit (~cols 0-7) and the 5-digit score (cols 98+)
+// live outside this range and aren't checked by the integration test —
+// the screenshot harness covers them visually instead.
 static uint8_t expected_radar_byte(int fb_col, uint8_t scroll, int sprite_y,
                                    int lander_world_x, int lander_y) {
-    if (fb_col < 32 || fb_col >= 96) {
-        if (fb_col < TEST_WAVE_DOTS) return 0x01;          // wave indicator
-        return 0;
-    }
+    if (fb_col < 32 || fb_col >= 96) return 0;
     int radar_col = fb_col - 32;
     uint8_t b = 0x81;                                       // borders
     if (height_table[radar_col * 4] >= 4) b |= 0x40;        // mountain dot
@@ -158,9 +155,10 @@ static int verify_frame(const ssd1306_t *d, int sx, int sy,
         }
     }
 
-    // Page 0 radar bar
+    // Page 0 radar bar — check only [32, 96). The wave-indicator digit
+    // and the 5-digit score occupy the page-0 margins outside this range.
     int lander_world_x = (lander_x >= 0) ? ((lander_x + scroll) & 0xFF) : -1;
-    for (int c = 0; c < SSD1306_WIDTH; c++) {
+    for (int c = 32; c < 96; c++) {
         uint8_t got  = d->fb[0 * SSD1306_WIDTH + c];
         uint8_t want = expected_radar_byte(c, scroll, sy,
                                            lander_world_x, lander_y);
