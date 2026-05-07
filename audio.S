@@ -30,6 +30,7 @@
 .equ SFX_HIT,   2
 .equ SFX_DEATH, 3
 .equ SFX_GRAB,  4
+.equ SFX_START, 5
 
 .section .bss, "aw", @nobits
 
@@ -75,8 +76,8 @@ audio_init:
 audio_play:
     cpi   r24, SFX_FIRE
     brlo  audio_play_done                 ; id 0 → ignore
-    cpi   r24, SFX_GRAB + 1
-    brsh  audio_play_done                 ; id > SFX_GRAB → ignore
+    cpi   r24, SFX_START + 1
+    brsh  audio_play_done                 ; id > SFX_START → ignore
     sts   sound_id, r24
     clr   r25
     sts   sound_frame, r25
@@ -166,6 +167,7 @@ audio_dispatch:
     .word sfx_hit_data
     .word sfx_death_data
     .word sfx_grab_data
+    .word sfx_start_data
 
 ; SFX_FIRE — fast descending chirp, ~6 frames (= 100 ms @ 60 Hz).
 ; 5 kHz → 1.4 kHz.
@@ -191,4 +193,14 @@ sfx_death_data:
 ; ascending pitch from ~660 Hz to ~4 kHz suggests "lifted up".
 sfx_grab_data:
     .word 1500, 1200, 900, 700, 500, 350, 250
+    .word 0xFFFF
+
+; SFX_START — boot/level-start jingle. Three-note ascending arpeggio
+; (~10 frames ≈ 167 ms). Pitches near C5 / G5 / C6 / E6 — major triad
+; rising, "ready to play" feel.
+sfx_start_data:
+    .word 1908, 1908                      ; ~524 Hz (~C5)
+    .word 1276, 1276                      ; ~784 Hz (~G5)
+    .word 954,  954                       ; ~1.05 kHz (~C6)
+    .word 759,  759                       ; ~1.32 kHz (~E6)
     .word 0xFFFF

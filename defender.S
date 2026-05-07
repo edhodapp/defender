@@ -181,6 +181,11 @@ hum_init_loop:
 
     sei                                    ; arm interrupts last
 
+    ; Boot jingle — short ascending arpeggio. Plays once during the first
+    ; few main_loop iterations.
+    ldi   r24, 5                           ; SFX_START
+    rcall audio_play
+
 .global main_loop
 main_loop:
     ; Frame tick: bump frame counter (used as divider for drift timing)
