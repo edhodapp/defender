@@ -40,6 +40,7 @@ fire_cooldown:  .skip 1                  ; auto-fire throttle; reloads to FIRE_C
 .equ ENTITY_SIZE,  3
 .equ TYPE_NONE,     0
 .equ TYPE_LANDER,   1
+.equ TYPE_MUTANT,   2                    ; matches dispatch slot 2
 .equ TYPE_HUMANOID, 7                    ; matches dispatch slot 7
 .global entities
 entities:       .skip ENTITY_SLOTS * ENTITY_SIZE
@@ -500,7 +501,11 @@ rr_ent_loop:
     swap  r25
     andi  r25, 0x07
     cpi   r25, TYPE_LANDER
-    brne  rr_ent_next                    ; only Landers plot on radar (for now)
+    breq  rr_ent_plot
+    cpi   r25, TYPE_MUTANT
+    breq  rr_ent_plot
+    rjmp  rr_ent_next                    ; only enemies plot on radar
+rr_ent_plot:
 
     ldd   r25, Y+1                       ; world_x
     lsr   r25
@@ -731,6 +736,8 @@ cc_ent_loop:
     andi  r26, 0x07
     cpi   r26, TYPE_LANDER
     breq  cc_ent_typed
+    cpi   r26, TYPE_MUTANT
+    breq  cc_ent_typed
     cpi   r26, TYPE_HUMANOID
     breq  cc_ent_typed
     rjmp  cc_ent_next
@@ -860,8 +867,12 @@ sc_loop:
     swap  r26
     andi  r26, 0x07
     cpi   r26, TYPE_LANDER
-    brne  sc_next
-    ; lander_screen_x in r26
+    breq  sc_typed
+    cpi   r26, TYPE_MUTANT
+    breq  sc_typed
+    rjmp  sc_next
+sc_typed:
+    ; lander/mutant screen_x in r26
     ldd   r26, Y+1
     lds   r27, scroll_offset
     sub   r26, r27
@@ -957,7 +968,7 @@ ue_next:
 update_dispatch:
     rjmp  update_noop                    ; type 0 = none
     rjmp  update_lander                  ; type 1 = Lander
-    rjmp  update_noop                    ; type 2 = (Mutant)
+    rjmp  update_mutant                  ; type 2 = Mutant
     rjmp  update_noop                    ; type 3 = (Bomber)
     rjmp  update_noop                    ; type 4 = (Pod)
     rjmp  update_noop                    ; type 5 = (Swarmer)
@@ -965,6 +976,53 @@ update_dispatch:
     rjmp  update_humanoid                ; type 7 = Humanoid
 
 update_noop:
+    ret
+
+; Mutant update — chase the player.
+;   Vertical: every 2 frames, move 1 row toward sprite_y.
+;   Horizontal: every 4 frames, move 1 col toward (scroll_offset + 60),
+;               with signed-delta wrap-aware direction.
+; Y points at the slot's byte 0; preserved on return.
+update_mutant:
+    ; Vertical (1 row / 2 frames).
+    lds   r25, frame_counter
+    sbrc  r25, 0
+    rjmp  um_skip_v                      ; odd frame, skip
+    ldd   r25, Y+2
+    mov   r24, r25
+    andi  r24, 0xC0                      ; preserve state2
+    andi  r25, 0x3F                      ; mutant_y
+    lds   r26, sprite_y
+    cp    r25, r26
+    breq  um_skip_v                      ; aligned vertically
+    brlo  um_v_down                      ; mutant_y < sprite_y → move down
+    dec   r25
+    rjmp  um_v_store
+um_v_down:
+    inc   r25
+um_v_store:
+    or    r25, r24
+    std   Y+2, r25
+um_skip_v:
+    ; Horizontal (1 col / 4 frames).
+    lds   r25, frame_counter
+    andi  r25, 0x03
+    brne  um_done
+    ldd   r24, Y+1                       ; mutant_world_x
+    lds   r25, scroll_offset
+    subi  r25, -60                       ; r25 = scroll_offset + 60 = ship's world_x
+    cp    r24, r25
+    breq  um_done
+    sub   r25, r24                       ; r25 = target - mutant
+    sbrc  r25, 7
+    rjmp  um_h_left
+    inc   r24
+    std   Y+1, r24
+    rjmp  um_done
+um_h_left:
+    dec   r24
+    std   Y+1, r24
+um_done:
     ret
 
 ; Humanoid update — usually a no-op. If byte 0 bit 0 is set, the humanoid is
@@ -1075,11 +1133,22 @@ ul_carrying:
     andi  r24, 0xC0
     andi  r25, 0x3F
     cpi   r25, 9
-    brlo  ul_done                        ; y <= 8 → pinned below radar bar
+    brlo  ul_done                        ; y < 9 (shouldn't happen — safety net)
+    breq  ul_become_mutant               ; y == 9 → transform at the threshold
     dec   r25
     or    r25, r24
     std   Y+2, r25
 ul_done:
+    ret
+
+; ul_become_mutant: in-place type change LANDER → MUTANT.
+; Preserves the active bit and overwrites everything else (carry, pause).
+; world_x and y are inherited so the Mutant pops in where the Lander was.
+ul_become_mutant:
+    ld    r25, Y
+    andi  r25, 0x80
+    ori   r25, (TYPE_MUTANT << 4)
+    st    Y, r25
     ret
 
 ; ul_humanoid_aligned: returns r24 = 1 if any active humanoid is within ±7
@@ -1276,7 +1345,7 @@ re_next:
 render_dispatch:
     rjmp  render_noop
     rjmp  render_lander
-    rjmp  render_noop                    ; type 2 = (Mutant)  — Phase 3
+    rjmp  render_mutant                  ; type 2 = Mutant
     rjmp  render_noop                    ; type 3 = (Bomber)
     rjmp  render_noop                    ; type 4 = (Pod)
     rjmp  render_noop                    ; type 5 = (Swarmer)
@@ -1326,6 +1395,25 @@ render_lander:
 rl_offscreen:
     ret
 
+; render_mutant: same wrapping logic as render_lander; uses mutant_sprite.
+render_mutant:
+    ldd   r20, Y+1
+    lds   r19, scroll_offset
+    sub   r20, r19
+    sbrc  r20, 7
+    rjmp  rm_offscreen
+    cpi   r20, 121
+    brsh  rm_offscreen
+    ldd   r21, Y+2
+    andi  r21, 0x3F
+    mov   r16, r20
+    mov   r17, r21
+    ldi   r30, lo8(mutant_sprite)
+    ldi   r31, hi8(mutant_sprite)
+    rcall blit_8x8
+rm_offscreen:
+    ret
+
 ; render_humanoid: convert world_x → screen_x; if visible, blit humanoid.
 ; Same wrapping discipline as render_lander.
 render_humanoid:
@@ -1372,6 +1460,20 @@ lander_sprite:
 ;     .XX..XX.   row 7   (feet)
 humanoid_sprite:
     .byte 0x00, 0x88, 0xCB, 0x3F, 0x3F, 0xCB, 0x88, 0x00
+    .balign 2
+
+; mutant_sprite — 8×8 angular alien (head with antennae, splayed claws/legs).
+; Visual:
+;     X.X..X.X   row 0  (antennae)
+;     .XXXXXX.   row 1
+;     XXX..XXX   row 2  (outstretched claws)
+;     .XXXXXX.   row 3
+;     ..XXXX..   row 4  (body)
+;     .X.XX.X.   row 5
+;     X..XX..X   row 6  (legs)
+;     .X....X.   row 7
+mutant_sprite:
+    .byte 0x45, 0xAE, 0x1F, 0x7A, 0x7A, 0x1F, 0xAE, 0x45
     .balign 2
 
 ; ============================================================================

@@ -131,18 +131,22 @@ static void test_carrying_lander_ascends(void) {
                   y0, y1);
 }
 
-// ---- 6. Carrying Lander pins at y=8 (just below the radar bar) ----
-static void test_carrying_lander_pins_below_radar(void) {
+// ---- 6. Carrying Lander reaching y=9 transforms into a Mutant
+//        (Phase 3 behavior — the captured humanoid is "consumed"). ----
+static void test_carrying_lander_becomes_mutant_at_top(void) {
     scenario_only();
     place_humanoid(1, 80);
     place_lander(0, 80, 39);
-    // ~36 frames to grab + ascend from y=40 to y=8 (32 rows × 4 = 128 frames)
-    // + buffer.
+    // ~36 frames for descent+pause+grab + ~120 frames to ascend from y=40
+    // to the y=9 transformation threshold + buffer.
     for (int i = 0; i < 240; i++) sim_run_frame(S);
-    SIM_CHECK_MSG(sim_lander_y(S, 0) == 8,
-                  "expected lander pinned at y=8 (just below radar); got y=%d",
-                  sim_lander_y(S, 0));
-    SIM_CHECK(sim_lander_carrying(S, 0));
+    int b0 = sim_mem_r(S, S->sym_entities + 0);
+    int type = (b0 >> 4) & 0x07;
+    SIM_CHECK_MSG(type == 2,
+                  "expected slot to have transformed to TYPE_MUTANT; got type=%d, byte0=0x%02X",
+                  type, b0);
+    SIM_CHECK_MSG((b0 & 0x0F) == 0,
+                  "transform should clear all state bits; byte0=0x%02X", b0);
 }
 
 // ---- 7. SFX_GRAB queued at the actual grab moment (post-pause) ----
@@ -187,7 +191,7 @@ int main(int argc, char **argv) {
     test_grab_after_full_pause();
     test_misaligned_lander_hunts();
     test_carrying_lander_ascends();
-    test_carrying_lander_pins_below_radar();
+    test_carrying_lander_becomes_mutant_at_top();
     test_sfx_grab_queued_at_grab_moment();
     test_humanoid_killed_during_pause_aborts_grab();
 
