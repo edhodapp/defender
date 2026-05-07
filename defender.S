@@ -796,8 +796,8 @@ cc_proj_loop_done:
 ; do with the slot:
 ;   * carrying Lander, beam in upper half [y, y+7]    → free humanoid (slot
 ;     becomes a falling humanoid; the lander dies)
-;   * carrying Lander, beam in lower half [y+8, y+15] → kill BOTH (the
-;     humanoid was the one shot; the lander goes down with it)
+;   * carrying Lander, beam in lower half [y+8, y+15] → kill humanoid only
+;     (clear the lander's carry bit; lander stays alive and resumes empty)
 ;   * anything else (empty Lander, grounded Humanoid, falling Humanoid)
 ;                                                     → just deactivate
 ;
@@ -812,16 +812,20 @@ cc_handle_hit:
     andi  r27, 0x07
     cpi   r27, TYPE_LANDER
     brne  chh_kill                       ; falling humanoid (HUMANOID + bit 0)
-    ; Carrying Lander hit. If the beam was in the lower 8 rows, the
-    ; humanoid took the shot — kill both. Otherwise, free the humanoid.
+    ; Carrying Lander hit. Lower half → drop the cargo; upper half → free.
     ldd   r26, Y+2
     andi  r26, 0x3F                      ; entity_y
     mov   r27, r17                       ; beam_y
     sub   r27, r26                       ; r27 = beam_y - entity_y
     cpi   r27, 8
-    brsh  chh_kill                       ; lower half → kill both
-    ; Upper half — free the humanoid as a falling one.
+    brsh  chh_drop_cargo                 ; lower half — kill humanoid only
+    ; Upper half — free the humanoid as a falling one (lander dies).
     ldi   r25, 0x80 | (TYPE_HUMANOID << 4) | 0x01
+    st    Y, r25
+    ret
+chh_drop_cargo:
+    ; Clear carry bit; lander stays active.
+    andi  r25, 0xFE
     st    Y, r25
     ret
 chh_kill:

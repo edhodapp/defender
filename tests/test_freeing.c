@@ -84,20 +84,22 @@ static void test_shoot_carrier_top_frees_humanoid(void) {
                   slot_y(0));
 }
 
-// ---- 1b. Shooting the dangling humanoid (lower half) KILLS BOTH —
-//         the humanoid takes the bullet and the Lander goes down with it.
-//         Distinct from shooting the Lander (top half), which frees the
-//         humanoid as a falling one. ----
-static void test_shoot_dangling_humanoid_kills_both(void) {
+// ---- 1b. Shooting the dangling humanoid kills ONLY the humanoid.
+//         The Lander loses its cargo (carry bit cleared), stays alive,
+//         and resumes empty-handed (will descend and try to grab again). ----
+static void test_shoot_dangling_humanoid_kills_humanoid_only(void) {
     scenario_only();
     place_lander_carrying(0, 80, 20);
-    // Beam at y=30, in the LOWER half of the 16-row carrying-Lander bbox
-    // (rows 28..35) — i.e., aimed at the visible humanoid below the lander.
-    sim_place_beam(S, 0, 76, 30, 0);
+    sim_place_beam(S, 0, 76, 30, 0);              // beam_y=30 → lower half
     sim_run_frame(S);
-    SIM_CHECK_MSG(!slot_active(0),
-                  "expected both lander and humanoid killed; byte0=0x%02X",
-                  slot_byte0(0));
+    SIM_CHECK_MSG(slot_active(0),
+                  "Lander should still be alive after losing cargo");
+    SIM_CHECK_MSG(slot_type(0) == TYPE_LANDER,
+                  "slot type should remain LANDER; got %d", slot_type(0));
+    SIM_CHECK_MSG((slot_byte0(0) & 0x01) == 0,
+                  "carry bit should be cleared; byte0=0x%02X", slot_byte0(0));
+    SIM_CHECK_MSG(slot_world_x(0) == 80,
+                  "lander world_x should be unchanged; got %d", slot_world_x(0));
 }
 
 // ---- 1c. Empty-handed Lander still has 8-row bbox (not extended). ----
@@ -185,7 +187,7 @@ int main(int argc, char **argv) {
     S = sim_boot(argv[1]);
 
     test_shoot_carrier_top_frees_humanoid();
-    test_shoot_dangling_humanoid_kills_both();
+    test_shoot_dangling_humanoid_kills_humanoid_only();
     test_empty_lander_8row_bbox();
     test_shoot_empty_lander_just_kills();
     test_shoot_grounded_humanoid();
