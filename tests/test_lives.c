@@ -179,6 +179,27 @@ static void test_bonus_ship_high(void) {
     SIM_CHECK_MSG(nb == 20000, "HIGH: next_bonus=%u (want 20000)", nb);
 }
 
+// Non-exact crossing: score lands ABOVE the threshold, not on it. Pins
+// the comparison as score >= next_bonus (not == next_bonus, which would
+// only fire on perfect-100-multiple thresholds and silently skip awards
+// when intermediate scoring sources later land non-multiples on score).
+static void test_bonus_ship_overshoots_threshold(void) {
+    sim_sync(S);
+    sim_clear_state_minimal(S);
+    sim_set_ship(S, 28, 0, 0);
+    sim_mem_w(S, S->sym_difficulty, 1);                   // MED
+    write24(sym_score_lo, sym_score_mid, sym_score_hi, 5950);
+    write24(sym_next_bonus_lo, sym_next_bonus_mid, sym_next_bonus_hi, 6000);
+    sim_place_lander(S, 0, 80, 28);
+    sim_place_beam(S, 0, 68, 32, 0);
+    for (int i = 0; i < 20; i++) quiet_run();
+    SIM_CHECK_MSG(lives() == 4, "overshoot: lives=%d (want 4)", lives());
+    uint32_t s = read24(sym_score_lo, sym_score_mid, sym_score_hi);
+    SIM_CHECK_MSG(s == 6050, "overshoot: score=%u (want 6050)", s);
+    uint32_t nb = read24(sym_next_bonus_lo, sym_next_bonus_mid, sym_next_bonus_hi);
+    SIM_CHECK_MSG(nb == 12000, "overshoot: next_bonus=%u (want 12000)", nb);
+}
+
 static void test_no_bonus_when_score_below_threshold(void) {
     sim_sync(S);
     sim_clear_state_minimal(S);
@@ -239,6 +260,7 @@ int main(int argc, char **argv) {
     test_bonus_ship_low();
     test_bonus_ship_med();
     test_bonus_ship_high();
+    test_bonus_ship_overshoots_threshold();
     test_no_bonus_when_score_below_threshold();
     test_lives_clamp_at_255();
 

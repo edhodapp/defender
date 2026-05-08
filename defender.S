@@ -1777,14 +1777,17 @@ chh_no_bonus:
 ; less-skilled players still see bonus ships at a reasonable cadence.
 ; The high byte is always 0 (max 10000 < 65536); callers can rely on
 ; that to skip a third add when extending to 24 bits.
-; Clobbers: r18, r24, r25.
+; Uses r24 itself for the difficulty test so the clobber list is just
+; the return registers — easier on callers, no scratch-register
+; bookkeeping required.
+; Clobbers: r24, r25 (return value).
 ; ============================================================================
 .global lookup_bonus_increment
 lookup_bonus_increment:
-    lds   r18, difficulty
-    cpi   r18, 0
+    lds   r24, difficulty
+    cpi   r24, 0
     breq  lbi_low
-    cpi   r18, 1
+    cpi   r24, 1
     breq  lbi_med
     ldi   r24, lo8(10000)                  ; HIGH (and any unexpected value)
     ldi   r25, hi8(10000)
