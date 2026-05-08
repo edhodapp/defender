@@ -80,6 +80,17 @@ high_scores:    .skip 9
 .global game_state
 game_state:     .skip 1
 
+; Magic byte distinguishing soft-reset (rjmp _reset from game-over) from
+; cold power-on. SRAM survives the rjmp, so we can write 0xA5 here just
+; before the rjmp; _reset reads and clears it. Any value other than 0xA5
+; means cold boot. Risk on cold boot: 1/256 chance random SRAM matches
+; the magic and we falsely take the soft-reset path. Consequence is
+; benign — the soft-reset path forces the splash to show, which is also
+; the cold-boot default (the only thing it bypasses is the
+; "hold B at boot to skip splash" shortcut).
+.global soft_reset_magic
+soft_reset_magic: .skip 1
+
 ; Difficulty (0=LOW, 1=MED, 2=HIGH). Wave sizes scale via wave_sizes_table.
 .global difficulty
 difficulty:     .skip 1
@@ -307,14 +318,27 @@ hum_init_loop:
     rcall eeprom_load_high_scores
 
     ; Splash screen — pick difficulty. Test harness can set skip_title_flag
-    ; via sim_mem_w before warmup; on hardware, holding B at boot also
-    ; bypasses for a quick-start (default difficulty stays MED).
+    ; via sim_mem_w before warmup; on cold-boot hardware, holding B at
+    ; reset also bypasses the splash for a quick-start. The cold-boot
+    ; B-held shortcut MUST be skipped after a soft-reset from game-over,
+    ; because the player is still physically holding B from the press
+    ; that triggered the reset; otherwise the splash flashes for one
+    ; frame and a new game starts immediately. soft_reset_magic survives
+    ; the rjmp _reset (SRAM is preserved); we read and consume it here.
+    lds   r25, soft_reset_magic
+    clr   r24
+    sts   soft_reset_magic, r24
+    cpi   r25, 0xA5
+    breq  show_title_force                 ; soft reset → always show title
     lds   r24, skip_title_flag
     cpi   r24, 0
-    brne  skip_title_screen
+    brne  skip_title_screen                ; test harness override
     in    r24, _SFR_IO_ADDR(PINB)
     sbrc  r24, 4                           ; B held = bit 4 clear
-    rcall title_loop                       ; B not held → show title
+    rjmp  show_title_force                 ; B not held → show title
+    rjmp  skip_title_screen                ; B held → skip
+show_title_force:
+    rcall title_loop
 skip_title_screen:
     ; Re-derive wave 1 size from the chosen difficulty (boot Lander
     ; counts as 1, subtract from table value).
@@ -573,9 +597,15 @@ main_game_over_path:
     sts   prev_buttons, r24              ; remember for next frame
     com   r25                            ; r25 = ~prev
     and   r25, r24                       ; r25 = newly-pressed edges
-    sbrc  r25, 5                         ; B edge?
-    rjmp  _reset                         ; soft reset → title screen
-    ; not pressed — fall through to ml_wait
+    sbrs  r25, 5                         ; B edge?
+    rjmp  ml_wait
+    ; B-edge: arm the soft-reset magic so _reset shows the splash
+    ; instead of running the cold-boot "B-held = skip splash" path
+    ; (B is almost certainly still held from the press we just
+    ; detected as an edge).
+    ldi   r25, 0xA5
+    sts   soft_reset_magic, r25
+    rjmp  _reset
 
     ; --- Frame cap: sleep until Timer1 says the next frame is due. ---
     ; The audio engine fires Timer3 interrupts mid-frame to drive PC7 in
