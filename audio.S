@@ -183,12 +183,17 @@ sfx_hit_data:
     .word 900, 300, 1500, 600, 1100, 400, 1700, 800
     .word 0xFFFF
 
-; SFX_DEATH — slow descending swoop, ~30 frames (~500 ms).
-; 5 kHz → 85 Hz, geometric sweep.
+; SFX_DEATH — Williams-flavored "kaboom swoop", 30 frames (~500 ms).
+; Geometric sweep from ~4 kHz down to ~250 Hz. Stops at ~250 Hz
+; because the Arduboy piezo's mechanical response collapses below
+; ~200 Hz; descending further produces no audible benefit and the
+; long-OCR end of a sweep just sounds like silence with clicks.
+; Aligned to the 30-frame ship-explosion phase so the sound and
+; animation end together.
 sfx_death_data:
-    .word  200,  230,  260,  300,  350,  400,  470,  540,  620,  720
-    .word  830,  950, 1100, 1280, 1470, 1690, 1940, 2230, 2560, 2940
-    .word 3380, 3880, 4460, 5120, 5880, 6760, 7770, 8930,10260,11790
+    .word  250,  275,  302,  333,  366,  402,  443,  487,  535,  589
+    .word  648,  712,  783,  862,  948, 1042, 1146, 1261, 1387, 1525
+    .word 1678, 1846, 2030, 2233, 2456, 2702, 2972, 3269, 3596, 3956
     .word 0xFFFF
 
 ; SFX_GRAB — rising tone (~8 frames). Lander has snatched a humanoid;
@@ -197,14 +202,17 @@ sfx_grab_data:
     .word 1500, 1200, 900, 700, 500, 350, 250
     .word 0xFFFF
 
-; SFX_START — boot/level-start jingle. Three-note ascending arpeggio
-; (~10 frames ≈ 167 ms). Pitches near C5 / G5 / C6 / E6 — major triad
-; rising, "ready to play" feel.
+; SFX_START — boot/level-start arpeggio. Five ascending notes of a
+; C major triad (root + third + fifth + octave + 10th), 6 frames
+; per note → 30 frames total (~500 ms). All five notes sit in the
+; piezo's strong band (500-1300 Hz) so the start chord is clearly
+; audible without harsh harmonics.
 sfx_start_data:
-    .word 1908, 1908                      ; ~524 Hz (~C5)
-    .word 1276, 1276                      ; ~784 Hz (~G5)
-    .word 954,  954                       ; ~1.05 kHz (~C6)
-    .word 759,  759                       ; ~1.32 kHz (~E6)
+    .word 1908, 1908, 1908, 1908, 1908, 1908   ; ~524 Hz  (C5)
+    .word 1514, 1514, 1514, 1514, 1514, 1514   ; ~660 Hz  (E5)
+    .word 1276, 1276, 1276, 1276, 1276, 1276   ; ~784 Hz  (G5)
+    .word  954,  954,  954,  954,  954,  954   ; ~1.05 kHz (C6)
+    .word  757,  757,  757,  757,  757,  757   ; ~1.32 kHz (E6)
     .word 0xFFFF
 
 ; SFX_WAVE — wave-change fanfare. Three-note ascending fifths
