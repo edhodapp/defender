@@ -178,6 +178,8 @@ _timer3_compa_isr:
 
 .global _reset
 _reset:
+    cli                                    ; soft-reset (rjmp from game-over)
+                                           ; lands here with IRQs enabled.
     ldi   r16, lo8(RAMEND)
     out   _SFR_IO_ADDR(SPL), r16
     ldi   r16, hi8(RAMEND)
@@ -565,9 +567,13 @@ main_game_over_path:
     ldi   r30, lo8(framebuffer)
     ldi   r31, hi8(framebuffer)
     call  oled_render
-    call  input_read
-    sbrc  r24, 5                         ; B pressed?
-    rjmp  _reset                          ; soft reset → title screen
+    call  input_read                     ; r24 = current button mask
+    lds   r25, prev_buttons              ; r25 = last frame's mask
+    sts   prev_buttons, r24              ; remember for next frame
+    com   r25                            ; r25 = ~prev
+    and   r25, r24                       ; r25 = newly-pressed edges
+    sbrc  r25, 5                         ; B edge?
+    rjmp  _reset                         ; soft reset → title screen
     ; not pressed — fall through to ml_wait
 
     ; --- Frame cap: sleep until Timer1 says the next frame is due. ---
@@ -920,22 +926,27 @@ render_score_value:
     pop   r2
     ret
 
-; rs_extract_digit: count how many times r25:r24 fits into r3:r2,
-; subtract from r3:r2, then blit that digit at (r16, 0) and advance r16.
-; r3:r2 is the running score remainder (caller-saved by render_score).
+; rs_extract_digit: count how many times r25:r24 fits into r4:r3:r2,
+; subtract from r4:r3:r2, then blit that digit at (r16, r17) and advance r16.
+; r4:r3:r2 is the running 24-bit score remainder. The subtrahend is at
+; most 10000 so its high byte is always 0; r26 holds that zero.
 rs_extract_digit:
     ldi   r18, 0                         ; digit value
+    ldi   r26, 0                         ; zero high-byte for 24-bit subtract
 red_loop:
     cp    r2, r24
     cpc   r3, r25
+    cpc   r4, r26
     brlo  red_done                       ; remainder < power → done
     sub   r2, r24
     sbc   r3, r25
+    sbc   r4, r26
     inc   r18
     rjmp  red_loop
 red_done:
     push  r2
     push  r3
+    push  r4
     push  r16
     push  r24
     push  r25
@@ -945,33 +956,36 @@ red_done:
     pop   r25
     pop   r24
     pop   r16
+    pop   r4
     pop   r3
     pop   r2
     subi  r16, -6                        ; advance x by 6 px
     ret
 
 ; ============================================================================
-; clamp_score_24_to_99999: r4:r3:r2 in -> r3:r2 out, clamped to 99999.
-; If the 24-bit value exceeds 99999, replace with 99999. Used by
-; render_score / render_score_value before the existing 16-bit decimal
-; extraction. r4 is dropped on return; only the 16-bit remainder matters.
-; Clobbers: r0, r1, r4, r24, r25, r26.
+; clamp_score_24_to_99999: r4:r3:r2 in -> r4:r3:r2 out, clamped to 99999.
+; If the 24-bit value is >= 100000, replace with 99999 = 0x01869F so the
+; 24-bit decimal extractor produces five '9' digits.
+; Clobbers: r24, r25, r26.
 ; ============================================================================
 clamp_score_24_to_99999:
-    ; Compare against 99999 = 0x0186A0 (lo=0xA0, mid=0x86, hi=0x01).
+    ; Compare against 100000 = 0x0186A0 (lo=0xA0, mid=0x86, hi=0x01).
     ldi   r24, 0xA0
     ldi   r25, 0x86
     ldi   r26, 0x01
     cp    r2, r24
     cpc   r3, r25
     cpc   r4, r26
-    brsh  cs_clamp                       ; >= 99999 -> clamp
+    brsh  cs_clamp                       ; >= 100000 -> clamp to 99999
     ret
 cs_clamp:
-    ldi   r24, 0xA0
-    ldi   r25, 0x86
+    ; 99999 = 0x01869F.
+    ldi   r24, 0x9F
     mov   r2, r24
-    mov   r3, r25
+    ldi   r24, 0x86
+    mov   r3, r24
+    ldi   r24, 0x01
+    mov   r4, r24
     ret
 
 ; ============================================================================
@@ -1406,8 +1420,13 @@ render_title:
 ; presses to choose difficulty, exit on B. Sleep-paced via Timer1 like
 ; main_loop. Returns once the player confirms.
 title_loop:
-    clr   r24
+    ; Sample current input as the prev-buttons baseline so any button
+    ; held when title_loop is entered (e.g., B still held after a
+    ; game-over → soft-reset transition) doesn't register as a fresh
+    ; edge on frame 1 and instantly confirm a difficulty selection.
+    call  input_read
     sts   prev_buttons, r24
+    clr   r24
     sts   reset_hold_frames, r24
 title_frame:
     rcall render_title
@@ -1727,9 +1746,14 @@ chh_dec_done:
     cpc   r25, r19
     cpc   r26, r20
     brlo  chh_no_bonus
+    ; Cap lives at 255 so a long run can't wrap the byte to 0 and
+    ; trip a spurious game-over the next time the ship is hit.
     lds   r24, lives
+    cpi   r24, 0xFF
+    breq  chh_skip_life_inc
     inc   r24
     sts   lives, r24
+chh_skip_life_inc:
     ; next_bonus += 10000 (24-bit add). -10000 in 24 bits = 0xFFD8F0.
     lds   r24, next_bonus_lo
     lds   r25, next_bonus_mid
@@ -1814,6 +1838,12 @@ sc_check:
     brne  sc_hit_done
     ldi   r25, 1
     sts   game_state, r25                 ; out of lives → game over
+    ; Suppress the very first game-over frame's edge detection: pretend
+    ; every button was held last frame, so whatever the player is
+    ; physically holding (almost always B, the fire button) doesn't
+    ; register as a fresh edge and instantly soft-reset the screen.
+    ldi   r25, 0xFF
+    sts   prev_buttons, r25
     rcall maybe_save_high_score           ; persist if this run beat the record
 sc_hit_done:
     ret
