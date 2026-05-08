@@ -79,21 +79,29 @@ static void hit_frame(void) {
     quiet_run();
 }
 
-static void test_three_hits_to_game_over(void) {
+// Williams convention: `lives` is the RESERVE count, displayed on the
+// HUD; the active ship is implicit. Player gets `lives + 1` total
+// chances (3 reserves + 1 active = 4 total). Game over fires only on
+// the FOURTH hit, not the third.
+static void test_four_hits_to_game_over(void) {
     scenario(28, 0);
     sim_place_lander(S, 0, 60, 28);
 
-    hit_frame();                                          // hit 1
+    hit_frame();                                          // hit 1: 3 reserves → 2
     SIM_CHECK_MSG(lives() == 2 && game_state() == 0,
                   "after hit 1: lives=%d game_state=%d", lives(), game_state());
-    hit_frame();                                          // hit 2
+    hit_frame();                                          // hit 2: 2 → 1
     SIM_CHECK_MSG(lives() == 1 && game_state() == 0,
                   "after hit 2: lives=%d game_state=%d", lives(), game_state());
-    hit_frame();                                          // hit 3 → game over
+    hit_frame();                                          // hit 3: 1 → 0
+    SIM_CHECK_MSG(lives() == 0 && game_state() == 0,
+                  "after hit 3: lives=%d game_state=%d (want 0/0 — last "
+                  "active ship still in play)", lives(), game_state());
+    hit_frame();                                          // hit 4: active dies, no reserve
     SIM_CHECK_MSG(lives() == 0,
-                  "after hit 3: lives=%d (want 0)", lives());
+                  "after hit 4: lives=%d (want 0)", lives());
     SIM_CHECK_MSG(game_state() == 1,
-                  "after hit 3: game_state=%d (want 1)", game_state());
+                  "after hit 4: game_state=%d (want 1)", game_state());
 }
 
 // On collision, respawn_invuln is armed to 90 and decremented once
@@ -162,7 +170,7 @@ static void test_respawn_invuln_blocks_re_collision(void) {
 static void test_game_over_freezes_lives(void) {
     scenario(28, 0);
     sim_place_lander(S, 0, 60, 28);
-    for (int i = 0; i < 3; i++) hit_frame();              // drain to game-over
+    for (int i = 0; i < 4; i++) hit_frame();              // 4 hits → game over
     SIM_CHECK(game_state() == 1);
     // Run more frames; main_loop short-circuits to main_game_over_path
     // and lives must not underflow / wrap to 255.
@@ -318,7 +326,7 @@ int main(int argc, char **argv) {
     test_collision_arms_respawn_invuln();
     test_respawn_invuln_decrements_per_frame();
     test_respawn_invuln_blocks_re_collision();
-    test_three_hits_to_game_over();
+    test_four_hits_to_game_over();
     test_game_over_freezes_lives();
 
     test_hud_lives_zero();

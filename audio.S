@@ -79,6 +79,17 @@ audio_play:
     brlo  audio_play_done                 ; id 0 → ignore
     cpi   r24, SFX_WAVE + 1
     brsh  audio_play_done                 ; id > SFX_WAVE → ignore
+    ; SFX_START is "music" — it must finish so the player hears the boot
+    ; arpeggio. Lower-priority FX (FIRE on a held-B from title confirm,
+    ; HIT, GRAB) silently bow out while it's playing. SFX_START itself
+    ; and SFX_DEATH/SFX_WAVE bypass the guard so a real game event can
+    ; still be heard if it somehow lands during the start jingle.
+    cpi   r24, SFX_START
+    brsh  audio_play_force                ; id >= SFX_START → bypass
+    lds   r25, sound_id
+    cpi   r25, SFX_START
+    breq  audio_play_done                 ; SFX_START in progress → keep it
+audio_play_force:
     sts   sound_id, r24
     clr   r25
     sts   sound_frame, r25

@@ -282,14 +282,9 @@ _reset:
     sts   game_state, r24
     ldi   r24, 3
     sts   lives, r24
-    ; First bonus-ship threshold from the per-difficulty table:
-    ; LOW=3000, MED=6000, HIGH=10000 (Williams Defender). Each
-    ; subsequent bonus award advances next_bonus by the same amount.
-    rcall lookup_bonus_increment           ; r25:r24 = increment (hi byte=0)
-    sts   next_bonus_lo, r24
-    sts   next_bonus_mid, r25
-    clr   r24
-    sts   next_bonus_hi, r24
+    ; (Bonus-ship threshold init moved to skip_title_screen below — at
+    ; this point `difficulty` is still the MED default. title_loop may
+    ; change it, so the threshold must be derived AFTER title returns.)
 
     ; Spawn 8 Humanoids on the ground (slots 1..8) at world_x = 16, 48, 80, ...
     ldi   r28, lo8(entities + 1*ENTITY_SIZE)
@@ -365,6 +360,16 @@ skip_title_screen:
     rcall lookup_wave_size
     dec   r24
     sts   wave_to_spawn, r24
+
+    ; First bonus-ship threshold from the per-difficulty table:
+    ; LOW=3000, MED=6000, HIGH=10000 (Williams Defender). Done HERE,
+    ; not pre-title, so it picks up the difficulty the player chose
+    ; rather than the MED default that was in place at _reset entry.
+    rcall lookup_bonus_increment           ; r25:r24 = increment (hi byte=0)
+    sts   next_bonus_lo, r24
+    sts   next_bonus_mid, r25
+    clr   r24
+    sts   next_bonus_hi, r24
 
     ; Boot jingle — short ascending arpeggio. Plays during the first
     ; few main_loop iterations after the title is dismissed.
@@ -1961,15 +1966,19 @@ sc_check:
     sts   respawn_invuln, r25
     ldi   r25, 3                          ; SFX_DEATH (overrides any pending HIT)
     sts   pending_sfx, r25
+    ; Williams convention: `lives` is the RESERVE count shown on the HUD;
+    ; the active ship is implicit. Player gets reserves + 1 total chances.
+    ; If reserves > 0 → consume one and respawn (animation will play).
+    ; If reserves == 0 → no reserve to swap in; this hit ends the game.
     lds   r25, lives
     cpi   r25, 0
-    breq  sc_hit_done                     ; already 0, shouldn't happen but safe
+    breq  sc_hit_fatal
     dec   r25
     sts   lives, r25
-    cpi   r25, 0
-    brne  sc_hit_done
+    ret
+sc_hit_fatal:
     ldi   r25, 1
-    sts   game_state, r25                 ; out of lives → game over
+    sts   game_state, r25
     ; Suppress the very first game-over frame's edge detection: pretend
     ; every button was held last frame, so whatever the player is
     ; physically holding (almost always B, the fire button) doesn't
@@ -1977,7 +1986,6 @@ sc_check:
     ldi   r25, 0xFF
     sts   prev_buttons, r25
     rcall maybe_save_high_score           ; persist if this run beat the record
-sc_hit_done:
     ret
 sc_next:
     adiw  r28, ENTITY_SIZE
