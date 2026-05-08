@@ -251,11 +251,12 @@ _reset:
     sts   game_state, r24
     ldi   r24, 3
     sts   lives, r24
-    ; First bonus ship at 10000 points (24-bit threshold).
-    ldi   r24, lo8(10000)
+    ; First bonus-ship threshold from the per-difficulty table:
+    ; LOW=3000, MED=6000, HIGH=10000 (Williams Defender). Each
+    ; subsequent bonus award advances next_bonus by the same amount.
+    rcall lookup_bonus_increment           ; r25:r24 = increment (hi byte=0)
     sts   next_bonus_lo, r24
-    ldi   r24, hi8(10000)
-    sts   next_bonus_mid, r24
+    sts   next_bonus_mid, r25
     clr   r24
     sts   next_bonus_hi, r24
 
@@ -1754,17 +1755,47 @@ chh_dec_done:
     inc   r24
     sts   lives, r24
 chh_skip_life_inc:
-    ; next_bonus += 10000 (24-bit add). -10000 in 24 bits = 0xFFD8F0.
-    lds   r24, next_bonus_lo
-    lds   r25, next_bonus_mid
-    lds   r26, next_bonus_hi
-    subi  r24, 0xF0
-    sbci  r25, 0xD8
-    sbci  r26, 0xFF
-    sts   next_bonus_lo, r24
-    sts   next_bonus_mid, r25
-    sts   next_bonus_hi, r26
+    ; next_bonus += per-difficulty bonus increment (24-bit add).
+    rcall lookup_bonus_increment           ; r25:r24 = increment (hi byte=0)
+    lds   r18, next_bonus_lo
+    lds   r19, next_bonus_mid
+    lds   r20, next_bonus_hi
+    add   r18, r24
+    adc   r19, r25
+    ldi   r24, 0
+    adc   r20, r24
+    sts   next_bonus_lo, r18
+    sts   next_bonus_mid, r19
+    sts   next_bonus_hi, r20
 chh_no_bonus:
+    ret
+
+; ============================================================================
+; lookup_bonus_increment: read `difficulty` (0=LOW, 1=MED, 2=HIGH) and
+; return the per-difficulty bonus-ship threshold/increment in r25:r24.
+; HIGH = 10000 matches Williams Defender; MED and LOW are scaled down so
+; less-skilled players still see bonus ships at a reasonable cadence.
+; The high byte is always 0 (max 10000 < 65536); callers can rely on
+; that to skip a third add when extending to 24 bits.
+; Clobbers: r18, r24, r25.
+; ============================================================================
+.global lookup_bonus_increment
+lookup_bonus_increment:
+    lds   r18, difficulty
+    cpi   r18, 0
+    breq  lbi_low
+    cpi   r18, 1
+    breq  lbi_med
+    ldi   r24, lo8(10000)                  ; HIGH (and any unexpected value)
+    ldi   r25, hi8(10000)
+    ret
+lbi_low:
+    ldi   r24, lo8(3000)
+    ldi   r25, hi8(3000)
+    ret
+lbi_med:
+    ldi   r24, lo8(6000)
+    ldi   r25, hi8(6000)
     ret
 
 ; ============================================================================
