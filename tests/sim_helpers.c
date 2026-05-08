@@ -94,6 +94,7 @@ sim_t *sim_boot_no_warmup(const char *elf_path) {
     s->sym_game_state     = sim_lookup(s, "game_state");
     s->sym_respawn_invuln = sim_lookup(s, "respawn_invuln");
     s->sym_death_y        = sim_lookup(s, "death_y");
+    s->sym_boot_warp_frames = sim_lookup(s, "boot_warp_frames");
     s->sym_projectiles    = sim_lookup(s, "projectiles");
     s->sym_entities       = sim_lookup(s, "entities");
     s->sym_framebuffer    = sim_lookup(s, "framebuffer");
@@ -216,6 +217,10 @@ void sim_clear_state_minimal(sim_t *s) {
     sim_mem_w(s, s->sym_lives, 3);
     sim_mem_w(s, s->sym_game_state, 0);
     sim_mem_w(s, s->sym_respawn_invuln, 0);
+    // Clear boot-warp grace period so tests that place a Lander at
+    // slot 0 see normal AI motion, not the half-second pause that
+    // gameplay uses to give the player time to react after splash.
+    sim_mem_w(s, s->sym_boot_warp_frames, 0);
 }
 
 void sim_set_ship(sim_t *s, int sprite_y, int scroll, int facing) {

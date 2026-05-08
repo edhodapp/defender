@@ -167,8 +167,21 @@ static void test_seeker_eventually_grabs(void) {
                   sim_lander_carrying(S, 0),
                   sim_lander_world_x(S, 0),
                   sim_lander_y(S, 0));
-    SIM_CHECK_MSG(!sim_lander_active(S, 1),
-                  "humanoid should be deactivated after grab");
+    // After grab, slot 1's byte 0 was cleared. The periodic spawner
+    // (every 32 frames) may have recycled the now-empty slot for a new
+    // Lander, so we can't simply check `!active`. What matters is that
+    // there's no longer an active humanoid at the original world_x.
+    int humanoid_at_90 = 0;
+    for (int i = 0; i < 64; i++) {
+        uint8_t b0 = sim_mem_r(S, S->sym_entities + i*3 + 0);
+        uint8_t wx = sim_mem_r(S, S->sym_entities + i*3 + 1);
+        if ((b0 & 0x80) && ((b0 >> 4) & 0x07) == TYPE_HUMANOID && wx == 90) {
+            humanoid_at_90++;
+        }
+    }
+    SIM_CHECK_MSG(humanoid_at_90 == 0,
+                  "humanoid at world_x=90 should be gone after grab; found %d",
+                  humanoid_at_90);
 }
 
 int main(int argc, char **argv) {

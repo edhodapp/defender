@@ -108,6 +108,16 @@ high_scores:    .skip 9
 .global game_state
 game_state:     .skip 1
 
+; Boot-warp grace period: the boot Lander placed at _reset doesn't run
+; its AI for the first N frames after main_loop starts, so the player
+; has a moment to see "there's a Lander up there at y=10" before it
+; starts seeking. Without this, the SFX_START 30-frame jingle elapses
+; with the Lander's AI running silently underneath, and the player
+; finds it already mid-descent and seeking when control returns. The
+; counter ticks down to 0 in main_alive's top-of-frame block.
+.global boot_warp_frames
+boot_warp_frames: .skip 1
+
 ; Magic byte distinguishing soft-reset (rjmp _reset from game-over) from
 ; cold power-on. SRAM survives the rjmp, so we can write 0xA5 here just
 ; before the rjmp; _reset reads and clears it. Any value other than 0xA5
@@ -264,14 +274,18 @@ _reset:
     brne  1b
 
     ; Spawn one Lander at world_x=100, y=10 (slot 0). This boot Lander
-    ; counts toward wave 1's 3-enemy total — the periodic spawner will
-    ; bring 2 more.
+    ; counts toward wave 1's total — the periodic spawner brings the rest.
     ldi   r24, (1<<7) | (TYPE_LANDER<<4)   ; active, type=Lander, state=0
     sts   entities + 0, r24
     ldi   r24, 100
     sts   entities + 1, r24                ; world_x
     ldi   r24, 10
     sts   entities + 2, r24                ; y (state2 = 0)
+    ; Hold the boot Lander still for ~half a second after main_loop
+    ; starts (covers the SFX_START jingle and gives the player time to
+    ; orient before AI seek begins).
+    ldi   r24, 30
+    sts   boot_warp_frames, r24
 
     ; Wave 1 setup: 1 boot Lander already alive; the rest derive from
     ; wave_sizes_table[difficulty][0]. Default difficulty = MED.
@@ -372,9 +386,7 @@ skip_title_screen:
     dec   r24
     sts   wave_to_spawn, r24
 
-    ; Pod allotment for wave 1 from per-difficulty table (see comment
-    ; on wave_pod_count_table). For LOW/MED/HIGH wave 1 this is all 0,
-    ; but doing the lookup here keeps init unconditional.
+    ; Pod allotment for wave 1 from per-difficulty table.
     rcall lookup_pod_count
     sts   wave_pods_to_spawn, r24
 
@@ -423,14 +435,26 @@ main_alive:
     sts   respawn_invuln, r25
 ri_tick_done:
 
-    ; Periodic Lander spawn: once per 256-frame counter cycle, fired at
-    ; frame_counter == 128. ~4.3 s at 60 Hz — longer than a worst-case
-    ; humanoid fall (160 frames from y=8 to y=48), so a freed humanoid
-    ; reaches the ground before the next Lander appears.
+    ; Tick the boot-warp counter. While > 0, update_lander short-circuits
+    ; for slot 0 so the boot Lander stays parked at its placement spot.
+    lds   r25, boot_warp_frames
+    cpi   r25, 0
+    breq  bw_tick_done
+    dec   r25
+    sts   boot_warp_frames, r25
+bw_tick_done:
+
+    ; Periodic enemy spawn: once every 32 frames (~533 ms at 60 Hz),
+    ; fires at frame_counter low 5 bits == 0. With wave_to_spawn = 5 to
+    ; 20 enemies, the wave fills in 2.5-10 seconds. The cadence is fast
+    ; enough that the player feels under pressure (matches Williams
+    ; Defender's hot-wave feel) but slow enough that a freed humanoid
+    ; from a downed carrying Lander has time to reach the ground before
+    ; the next Lander would arrive on top of it.
     ;
     ; Reload r25 — audio_tick clobbers it.
     lds   r25, frame_counter
-    cpi   r25, 128
+    andi  r25, 0x1F
     brne  no_spawn_check
     rcall try_spawn_enemy
 no_spawn_check:
@@ -1863,21 +1887,27 @@ chh_drop_cargo:
 chh_kill:
     ; Pre-clear: capture original type so we know whether to decrement,
     ; and so we can dispatch on Pod (which has a special death effect).
+    ; All chh_dec_enemy branches go through a local trampoline (chk_dec)
+    ; because chh_dec_enemy lives outside the 7-bit cond-branch range.
     ld    r25, Y
     mov   r27, r25
     swap  r27
     andi  r27, 0x07                      ; r27 = type
     cpi   r27, TYPE_POD
-    breq  chh_pod                        ; Pod: spawn Swarmers FIRST, then count
+    brne  chk_not_pod
+    rjmp  chh_pod                        ; Pod: spawn Swarmers FIRST, then count
+chk_not_pod:
     clr   r25
     st    Y, r25                         ; deactivate slot
     cpi   r27, TYPE_LANDER
-    breq  chh_dec_enemy
+    breq  chk_dec
     cpi   r27, TYPE_MUTANT
-    breq  chh_dec_enemy
+    breq  chk_dec
     cpi   r27, TYPE_SWARMER
-    breq  chh_dec_enemy
+    breq  chk_dec
     ret                                  ; humanoid kill — no count change
+chk_dec:
+    rjmp  chh_dec_enemy
 
 chh_pod:
     ; Capture pod position before clearing the slot, then deactivate
@@ -1893,14 +1923,24 @@ chh_pod:
     rcall spawn_swarmers                 ; preserves Y; uses X internally
     rjmp  chh_dec_enemy
 
-; spawn_swarmers: install up to POD_SWARMER_COUNT Swarmers at (r24=world_x,
-; r25=y). Searches entity slots via X (r26:r27) so Y is preserved for
-; the caller (chh inside cc_proj_loop's hot path). All Swarmers start
-; at the same world position; their chase AI will fan them out as they
-; converge on the ship.
-; Clobbers: r18, r19, r20, r26, r27.
+; spawn_swarmers: install up to POD_SWARMER_COUNT Swarmers at offsets
+; from (r24=world_x, r25=y). Searches entity slots via X (r26:r27) so
+; Y is preserved for the caller (chh inside cc_proj_loop's hot path).
+; Per-swarmer (dx, dy) offsets come from swarmer_spawn_offsets — without
+; them all five Swarmers would start at the same world position with
+; identical chase state and never separate (they'd cluster as one big
+; target). Offsets fan them out into a small cross/X pattern so they
+; converge on the ship from different angles.
+; Clobbers: r2, r3, r4 (push/pop), r19, r20, r21, r24, r25, r26, r27,
+; r30, r31.
 spawn_swarmers:
-    ldi   r18, POD_SWARMER_COUNT         ; how many we still want to install
+    push  r2
+    push  r3
+    push  r4
+    mov   r2, r24                        ; cache base_x
+    mov   r3, r25                        ; cache base_y (already 6-bit clean)
+    ldi   r24, POD_SWARMER_COUNT
+    mov   r4, r24                        ; remaining swarmers to install
     ldi   r26, lo8(entities)
     ldi   r27, hi8(entities)
     ldi   r19, ENTITY_SLOTS
@@ -1911,12 +1951,28 @@ ss_find_loop:
     adiw  r26, ENTITY_SIZE
     dec   r19
     brne  ss_find_loop
-    ret                                  ; out of free slots — spawn fewer
+    rjmp  ss_done                        ; out of free slots — spawn fewer
 ss_install:
-    ; AVR limitation: X (r26:r27) doesn't support std with displacement —
-    ; use st X+ three times to advance through byte 0, 1, 2 in order.
-    ; That also advances X to the next slot, replacing the adiw that
-    ; the find-loop would otherwise need.
+    ; offset_index = POD_SWARMER_COUNT - r4 (0 for the first install,
+    ; 4 for the last). Each entry is 2 bytes (dx, dy).
+    ldi   r20, POD_SWARMER_COUNT
+    sub   r20, r4
+    lsl   r20                            ; *2
+    ldi   r30, lo8(swarmer_spawn_offsets)
+    ldi   r31, hi8(swarmer_spawn_offsets)
+    add   r30, r20
+    ldi   r20, 0
+    adc   r31, r20
+    lpm   r20, Z+                        ; r20 = signed dx
+    lpm   r21, Z                         ; r21 = signed dy
+    mov   r24, r2
+    add   r24, r20                       ; world_x + dx (mod-256 wrap is fine)
+    mov   r25, r3
+    add   r25, r21                       ; y + dy
+    andi  r25, 0x3F                      ; clear state2 bits
+    ; AVR limitation: X (r26:r27) doesn't support std with displacement.
+    ; st X+ x 3 walks bytes 0/1/2 and advances X to the next slot,
+    ; replacing the explicit adiw the find-loop would otherwise need.
     ldi   r20, (1<<7) | (TYPE_SWARMER<<4)
     st    X+, r20
     st    X+, r24
@@ -1926,10 +1982,24 @@ ss_install:
     sts   enemies_alive, r20
     dec   r19
     breq  ss_done                        ; no more slots to scan
-    dec   r18
+    dec   r4
     brne  ss_find_loop                   ; still want more swarmers
 ss_done:
+    pop   r4
+    pop   r3
+    pop   r2
     ret
+
+; Offsets applied to a Pod's (world_x, y) when spawning the 5 Swarmers
+; that replace it. Spreads them in a small "+" pattern so they don't
+; converge as one indistinguishable clump. Each entry is (dx, dy).
+swarmer_spawn_offsets:
+    .byte  0,  0      ; index 0: at the pod's exact center
+    .byte -4, -2      ; NW
+    .byte  4, -2      ; NE
+    .byte -4,  2      ; SW
+    .byte  4,  2      ; SE
+    .balign 2
 chh_dec_enemy:
     lds   r25, enemies_alive
     cpi   r25, 0
@@ -2050,6 +2120,10 @@ sc_loop:
     cpi   r26, TYPE_LANDER
     breq  sc_typed
     cpi   r26, TYPE_MUTANT
+    breq  sc_typed
+    cpi   r26, TYPE_POD
+    breq  sc_typed
+    cpi   r26, TYPE_SWARMER
     breq  sc_typed
     rjmp  sc_next
 sc_typed:
@@ -2468,6 +2542,21 @@ usw_done:
 ;
 ; Y points at the slot's byte 0 on entry; preserved on return.
 update_lander:
+    ; Boot-warp gate: while boot_warp_frames > 0 AND we're processing
+    ; slot 0 (the boot Lander), skip the AI so the lander stays parked
+    ; at its placement spot. Y points at byte 0 of the current slot, so
+    ; Y == lo8/hi8(entities) means slot 0.
+    ldi   r24, lo8(entities)
+    cp    r28, r24
+    brne  ul_after_warp
+    ldi   r24, hi8(entities)
+    cp    r29, r24
+    brne  ul_after_warp
+    lds   r25, boot_warp_frames
+    cpi   r25, 0
+    breq  ul_after_warp
+    ret
+ul_after_warp:
     ld    r24, Y
     sbrc  r24, 0
     rjmp  ul_carrying

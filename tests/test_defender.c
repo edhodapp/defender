@@ -297,10 +297,13 @@ int main(int argc, char **argv) {
     // set the flag so the firmware bypasses the splash UI.
     while (avr->cycle < 500) avr_run(avr);
     avr_symbol_t **sym_arr = fw.symbol;
+    uint16_t boot_warp_addr = 0;
     for (uint32_t i = 0; i < fw.symbolcount; i++) {
         if (strcmp(sym_arr[i]->symbol, "skip_title_flag") == 0) {
             avr->data[sym_arr[i]->addr & 0xFFFF] = 1;
-            break;
+        }
+        if (strcmp(sym_arr[i]->symbol, "boot_warp_frames") == 0) {
+            boot_warp_addr = sym_arr[i]->addr & 0xFFFF;
         }
     }
 
@@ -308,6 +311,14 @@ int main(int argc, char **argv) {
     if (run_until_data(avr, &display, 1024) == cpu_Crashed) {
         fprintf(stderr, "FAIL: cpu_Crashed before frame 1\n"); return 1;
     }
+    // Clear the boot-warp grace period AFTER frame 1 lands. Setting it
+    // before frame 1 doesn't work because _reset writes 30 to it deep
+    // in init (after oled_init's I2C sequence eats >500 cycles), so a
+    // pre-_reset write would be overwritten. After frame 1 the firmware
+    // is in main_loop and the value sticks. The Lander's first drift
+    // is gated to frame_counter==4, so even though frame 1 ran with
+    // warp=30 active, no AI motion was missed.
+    if (boot_warp_addr) avr->data[boot_warp_addr] = 0;
     // Lander spawns at world_x=100, y=10. Drifts 1 row every 4 frames AND
     // seeks 1 col toward the closest humanoid (at world_x=112) per drift,
     // so world_x advances by 1 per drift event too.
