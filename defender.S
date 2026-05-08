@@ -62,6 +62,14 @@ frame_ready:    .skip 1                  ; set by Timer1 ISR; cleared after main
 wave_number:    .skip 1
 .global wave_to_spawn
 wave_to_spawn:  .skip 1
+
+; Of the wave_to_spawn budget, how many should be Pods. The spawner
+; spawns Pods first (greedy), then Landers fill the rest of the
+; wave_to_spawn count. Re-derived from wave_pod_count_table on _reset
+; and at every wave-end.
+.global wave_pods_to_spawn
+wave_pods_to_spawn: .skip 1
+
 .global enemies_alive
 enemies_alive:  .skip 1
 
@@ -150,7 +158,10 @@ skip_title_flag: .skip 1
 .equ TYPE_NONE,     0
 .equ TYPE_LANDER,   1
 .equ TYPE_MUTANT,   2                    ; matches dispatch slot 2
+.equ TYPE_POD,      3                    ; matches dispatch slot 3
+.equ TYPE_SWARMER,  5                    ; matches dispatch slot 5
 .equ TYPE_HUMANOID, 7                    ; matches dispatch slot 7
+.equ POD_SWARMER_COUNT, 5                ; Swarmers spawned per Pod death
 .global entities
 entities:       .skip ENTITY_SLOTS * ENTITY_SIZE
 
@@ -330,7 +341,7 @@ hum_init_loop:
     ; the title's RESET row), the magic is missing and the EEPROM cells
     ; read 0xFF; we lay down a fresh 0xDF + 9 zero bytes. On every
     ; subsequent boot we just slurp the 9 score bytes into BSS.
-    rcall eeprom_load_high_scores
+    call  eeprom_load_high_scores
 
     ; Splash screen — pick difficulty. Test harness can set skip_title_flag
     ; via sim_mem_w before warmup; on cold-boot hardware, holding B at
@@ -360,6 +371,12 @@ skip_title_screen:
     rcall lookup_wave_size
     dec   r24
     sts   wave_to_spawn, r24
+
+    ; Pod allotment for wave 1 from per-difficulty table (see comment
+    ; on wave_pod_count_table). For LOW/MED/HIGH wave 1 this is all 0,
+    ; but doing the lookup here keeps init unconditional.
+    rcall lookup_pod_count
+    sts   wave_pods_to_spawn, r24
 
     ; First bonus-ship threshold from the per-difficulty table:
     ; LOW=3000, MED=6000, HIGH=10000 (Williams Defender). Done HERE,
@@ -415,7 +432,7 @@ ri_tick_done:
     lds   r25, frame_counter
     cpi   r25, 128
     brne  no_spawn_check
-    rcall try_spawn_lander
+    rcall try_spawn_enemy
 no_spawn_check:
 
     call  input_read                     ; r24 = button bitmask
@@ -585,11 +602,14 @@ wave_at_max:
     ; New wave_to_spawn from the difficulty table.
     rcall lookup_wave_size
     sts   wave_to_spawn, r24
+    ; Per-wave Pod allotment.
+    rcall lookup_pod_count
+    sts   wave_pods_to_spawn, r24
     ldi   r24, 6                         ; SFX_WAVE_CHANGE
     call  audio_play
     ; Kick the new wave: spawn one immediately so the player sees a fresh
     ; enemy without waiting for the next periodic fc==128 tick.
-    rcall try_spawn_lander
+    rcall try_spawn_enemy
 wave_in_progress:
 
     ; --- Render this frame ---
@@ -1096,7 +1116,7 @@ cs_clamp:
 eeprom_load_high_scores:
     ldi   r24, 0
     ldi   r25, 0
-    rcall eeprom_read_byte               ; r24 = magic
+    call  eeprom_read_byte               ; r24 = magic
     cpi   r24, EEPROM_MAGIC
     breq  ehs_load
     ; Fresh / corrupted table: write magic + 9 zero score bytes, then
@@ -1104,7 +1124,7 @@ eeprom_load_high_scores:
     ldi   r24, 0
     ldi   r25, 0
     ldi   r22, EEPROM_MAGIC
-    rcall eeprom_write_byte
+    call  eeprom_write_byte
     ldi   r23, 9                         ; remaining bytes to clear
     ldi   r24, 1
     ldi   r25, 0
@@ -1113,7 +1133,7 @@ ehs_init_loop:
     push  r24
     push  r25
     ldi   r22, 0
-    rcall eeprom_write_byte
+    call  eeprom_write_byte
     pop   r25
     pop   r24
     pop   r23
@@ -1133,7 +1153,7 @@ ehs_load_loop:
     push  r25
     push  r26
     push  r27
-    rcall eeprom_read_byte               ; r24 = byte
+    call  eeprom_read_byte               ; r24 = byte
     pop   r27
     pop   r26
     st    X+, r24
@@ -1171,7 +1191,7 @@ ehssh_loop:
     push  r26
     push  r27
     ld    r22, X
-    rcall eeprom_write_byte
+    call  eeprom_write_byte
     pop   r27
     pop   r26
     adiw  r26, 1
@@ -1218,7 +1238,7 @@ maybe_save_high_score:
     st    X, r4
     ; Persist the updated 3-byte slot via EEPROM.
     lds   r24, difficulty
-    rcall eeprom_save_high_score_for_difficulty
+    call  eeprom_save_high_score_for_difficulty
 mshs_done:
     ret
 
@@ -1243,7 +1263,7 @@ ehw_loop:
     push  r24
     push  r25
     ldi   r22, 0
-    rcall eeprom_write_byte
+    call  eeprom_write_byte
     pop   r25
     pop   r24
     pop   r23
@@ -1563,7 +1583,7 @@ title_no_down:
     sts   reset_hold_frames, r25
     cpi   r25, 60
     brne  title_wait
-    rcall eeprom_wipe_high_scores
+    call  eeprom_wipe_high_scores
     rjmp  title_wait
 title_reset_clear:
     clr   r25
@@ -1613,7 +1633,38 @@ lws_clamped:
     lpm   r24, Z
     ret
 
-try_spawn_lander:
+; lookup_pod_count: returns r24 = wave_pod_count_table[difficulty][min(wave_number-1, 7)].
+; Same indexing logic as lookup_wave_size; just a different table base.
+lookup_pod_count:
+    lds   r25, wave_number
+    cpi   r25, 0
+    brne  lpc_have_wave
+    ldi   r25, 1
+lpc_have_wave:
+    dec   r25
+    cpi   r25, 8
+    brlo  lpc_clamped
+    ldi   r25, 7
+lpc_clamped:
+    lds   r24, difficulty
+    lsl   r24
+    lsl   r24
+    lsl   r24
+    add   r24, r25
+    ldi   r30, lo8(wave_pod_count_table)
+    ldi   r31, hi8(wave_pod_count_table)
+    add   r30, r24
+    ldi   r24, 0
+    adc   r31, r24
+    lpm   r24, Z
+    ret
+
+; try_spawn_enemy: at every periodic-spawn tick (and at every wave-end
+; kick), try to install one new attacker. Picks Pod first if any pods
+; remain in the per-wave allotment; otherwise installs a Lander. Both
+; share spawn position scheduling (spawn_pos_idx) and the
+; wave_to_spawn/enemies_alive bookkeeping.
+try_spawn_enemy:
     ; Wave gate: skip if the wave has no more attackers to spawn.
     lds   r24, wave_to_spawn
     cpi   r24, 0
@@ -1639,7 +1690,18 @@ tsl_have_slot:
     lsl   r25
     lsl   r25                            ; r25 = idx * 32 (mod 256)
     subi  r25, -16                       ; +16
+    ; Choose enemy type: Pod first (if any in the wave allotment),
+    ; else Lander.
+    lds   r24, wave_pods_to_spawn
+    cpi   r24, 0
+    breq  tse_install_lander
+    dec   r24
+    sts   wave_pods_to_spawn, r24
+    ldi   r24, (1<<7) | (TYPE_POD<<4)
+    rjmp  tse_install
+tse_install_lander:
     ldi   r24, (1<<7) | (TYPE_LANDER<<4)
+tse_install:
     st    Y, r24
     std   Y+1, r25
     ldi   r24, 10                        ; y
@@ -1696,6 +1758,10 @@ cc_ent_loop:
     cpi   r26, TYPE_LANDER
     breq  cc_ent_typed
     cpi   r26, TYPE_MUTANT
+    breq  cc_ent_typed
+    cpi   r26, TYPE_POD
+    breq  cc_ent_typed
+    cpi   r26, TYPE_SWARMER
     breq  cc_ent_typed
     cpi   r26, TYPE_HUMANOID
     breq  cc_ent_typed
@@ -1795,18 +1861,75 @@ chh_drop_cargo:
     st    Y, r25
     ret
 chh_kill:
-    ; Pre-clear: capture original type so we know whether to decrement.
+    ; Pre-clear: capture original type so we know whether to decrement,
+    ; and so we can dispatch on Pod (which has a special death effect).
     ld    r25, Y
     mov   r27, r25
     swap  r27
     andi  r27, 0x07                      ; r27 = type
+    cpi   r27, TYPE_POD
+    breq  chh_pod                        ; Pod: spawn Swarmers FIRST, then count
     clr   r25
-    st    Y, r25
+    st    Y, r25                         ; deactivate slot
     cpi   r27, TYPE_LANDER
     breq  chh_dec_enemy
     cpi   r27, TYPE_MUTANT
     breq  chh_dec_enemy
+    cpi   r27, TYPE_SWARMER
+    breq  chh_dec_enemy
     ret                                  ; humanoid kill — no count change
+
+chh_pod:
+    ; Capture pod position before clearing the slot, then deactivate
+    ; the pod and spawn POD_SWARMER_COUNT Swarmers at that position.
+    ; The Pod itself counts as a normal kill (chh_dec_enemy → 100 pts +
+    ; bonus check), and each Swarmer adds 1 to enemies_alive so the
+    ; wave doesn't close until all Swarmers die too.
+    ldd   r24, Y+1                       ; pod_world_x
+    ldd   r25, Y+2
+    andi  r25, 0x3F                      ; pod_y
+    clr   r26
+    st    Y, r26                         ; deactivate pod slot
+    rcall spawn_swarmers                 ; preserves Y; uses X internally
+    rjmp  chh_dec_enemy
+
+; spawn_swarmers: install up to POD_SWARMER_COUNT Swarmers at (r24=world_x,
+; r25=y). Searches entity slots via X (r26:r27) so Y is preserved for
+; the caller (chh inside cc_proj_loop's hot path). All Swarmers start
+; at the same world position; their chase AI will fan them out as they
+; converge on the ship.
+; Clobbers: r18, r19, r20, r26, r27.
+spawn_swarmers:
+    ldi   r18, POD_SWARMER_COUNT         ; how many we still want to install
+    ldi   r26, lo8(entities)
+    ldi   r27, hi8(entities)
+    ldi   r19, ENTITY_SLOTS
+ss_find_loop:
+    ld    r20, X
+    sbrs  r20, 7
+    rjmp  ss_install                     ; bit 7 clear → slot is free
+    adiw  r26, ENTITY_SIZE
+    dec   r19
+    brne  ss_find_loop
+    ret                                  ; out of free slots — spawn fewer
+ss_install:
+    ; AVR limitation: X (r26:r27) doesn't support std with displacement —
+    ; use st X+ three times to advance through byte 0, 1, 2 in order.
+    ; That also advances X to the next slot, replacing the adiw that
+    ; the find-loop would otherwise need.
+    ldi   r20, (1<<7) | (TYPE_SWARMER<<4)
+    st    X+, r20
+    st    X+, r24
+    st    X+, r25
+    lds   r20, enemies_alive
+    inc   r20
+    sts   enemies_alive, r20
+    dec   r19
+    breq  ss_done                        ; no more slots to scan
+    dec   r18
+    brne  ss_find_loop                   ; still want more swarmers
+ss_done:
+    ret
 chh_dec_enemy:
     lds   r25, enemies_alive
     cpi   r25, 0
@@ -2177,9 +2300,9 @@ update_dispatch:
     rjmp  update_noop                    ; type 0 = none
     rjmp  update_lander                  ; type 1 = Lander
     rjmp  update_mutant                  ; type 2 = Mutant
-    rjmp  update_noop                    ; type 3 = (Bomber)
-    rjmp  update_noop                    ; type 4 = (Pod)
-    rjmp  update_noop                    ; type 5 = (Swarmer)
+    rjmp  update_pod                     ; type 3 = Pod
+    rjmp  update_noop                    ; type 4 = (Bomber)
+    rjmp  update_swarmer                 ; type 5 = Swarmer
     rjmp  update_noop                    ; type 6 = (Baiter)
     rjmp  update_humanoid                ; type 7 = Humanoid
 
@@ -2262,6 +2385,75 @@ uh_at_ground:
     andi  r24, 0xFE
     st    Y, r24
 uh_done:
+    ret
+
+; Pod update — slow horizontal drift toward the player. 1 column every
+; 8 frames (half-Mutant horizontal speed); no vertical movement (Pod
+; stays near top edge until shot). Wrap-aware direction picks the
+; shorter of the two world directions.
+; Y points at the slot's byte 0 on entry; preserved on return.
+update_pod:
+    lds   r25, frame_counter
+    andi  r25, 0x07
+    brne  upod_done                      ; act 1/8 frames
+    ldd   r24, Y+1                       ; pod_world_x
+    lds   r25, scroll_offset
+    subi  r25, -60                       ; r25 = ship_world_x
+    cp    r24, r25
+    breq  upod_done                      ; aligned
+    sub   r25, r24                       ; r25 = ship - pod (sign = direction)
+    sbrc  r25, 7
+    rjmp  upod_left                      ; ship to the left → dec pod_x
+    inc   r24
+    std   Y+1, r24
+    rjmp  upod_done
+upod_left:
+    dec   r24
+    std   Y+1, r24
+upod_done:
+    ret
+
+; Swarmer update — fast chase, 2× Mutant speed. 1 row / frame vertical
+; toward sprite_y; 1 column / 2 frames horizontal toward the ship's
+; world_x. Spawned 5-at-a-time from a killed Pod.
+; Y points at the slot's byte 0 on entry; preserved on return.
+update_swarmer:
+    ; Vertical (1 row / frame).
+    ldd   r25, Y+2
+    mov   r24, r25
+    andi  r24, 0xC0                      ; preserve state2
+    andi  r25, 0x3F                      ; swarmer_y
+    lds   r26, sprite_y
+    cp    r25, r26
+    breq  usw_skip_v
+    brlo  usw_v_down
+    dec   r25
+    rjmp  usw_v_store
+usw_v_down:
+    inc   r25
+usw_v_store:
+    or    r25, r24
+    std   Y+2, r25
+usw_skip_v:
+    ; Horizontal (1 col / 2 frames).
+    lds   r25, frame_counter
+    andi  r25, 0x01
+    brne  usw_done
+    ldd   r24, Y+1
+    lds   r25, scroll_offset
+    subi  r25, -60
+    cp    r24, r25
+    breq  usw_done
+    sub   r25, r24
+    sbrc  r25, 7
+    rjmp  usw_h_left
+    inc   r24
+    std   Y+1, r24
+    rjmp  usw_done
+usw_h_left:
+    dec   r24
+    std   Y+1, r24
+usw_done:
     ret
 
 ; Lander update — descend to humanoid altitude, hover on its head, pause,
@@ -2554,9 +2746,9 @@ render_dispatch:
     rjmp  render_noop
     rjmp  render_lander
     rjmp  render_mutant                  ; type 2 = Mutant
-    rjmp  render_noop                    ; type 3 = (Bomber)
-    rjmp  render_noop                    ; type 4 = (Pod)
-    rjmp  render_noop                    ; type 5 = (Swarmer)
+    rjmp  render_pod                     ; type 3 = Pod
+    rjmp  render_noop                    ; type 4 = (Bomber)
+    rjmp  render_swarmer                 ; type 5 = Swarmer
     rjmp  render_noop                    ; type 6 = (Baiter)  — Phase 4
     rjmp  render_humanoid                ; type 7 = Humanoid
 
@@ -2642,6 +2834,43 @@ render_humanoid:
 rh_offscreen:
     ret
 
+; render_pod / render_swarmer: same wrapping logic as render_lander.
+render_pod:
+    ldd   r20, Y+1
+    lds   r19, scroll_offset
+    sub   r20, r19
+    sbrc  r20, 7
+    rjmp  rpod_offscreen
+    cpi   r20, 121
+    brsh  rpod_offscreen
+    ldd   r21, Y+2
+    andi  r21, 0x3F
+    mov   r16, r20
+    mov   r17, r21
+    ldi   r30, lo8(pod_sprite)
+    ldi   r31, hi8(pod_sprite)
+    call  blit_8x8
+rpod_offscreen:
+    ret
+
+render_swarmer:
+    ldd   r20, Y+1
+    lds   r19, scroll_offset
+    sub   r20, r19
+    sbrc  r20, 7
+    rjmp  rsw_offscreen
+    cpi   r20, 121
+    brsh  rsw_offscreen
+    ldd   r21, Y+2
+    andi  r21, 0x3F
+    mov   r16, r20
+    mov   r17, r21
+    ldi   r30, lo8(swarmer_sprite)
+    ldi   r31, hi8(swarmer_sprite)
+    call  blit_8x8
+rsw_offscreen:
+    ret
+
 ; Lander sprite — 8x8, simple bug-like shape, framebuffer-column order.
 ; Visual layout:
 ;     ........
@@ -2684,6 +2913,37 @@ mutant_sprite:
     .byte 0x45, 0xAE, 0x1F, 0x7A, 0x7A, 0x1F, 0xAE, 0x45
     .balign 2
 
+; pod_sprite — 8×8 hollow oval. Visually distinct from the solid Lander
+; (lander is filled, pod is a ring) so the player can tell them apart
+; at a glance. Slow drifter, fat target.
+; Visual:
+;     ...XX...   row 0
+;     ..X..X..   row 1
+;     .X....X.   row 2
+;     X......X   row 3
+;     X......X   row 4
+;     .X....X.   row 5
+;     ..X..X..   row 6
+;     ...XX...   row 7
+pod_sprite:
+    .byte 0x18, 0x24, 0x42, 0x81, 0x81, 0x42, 0x24, 0x18
+    .balign 2
+
+; swarmer_sprite — small "X" inside the 8×8 box. Tiny target, hard to
+; hit; spawns 5-at-a-time from a killed Pod.
+; Visual:
+;     ........   row 0
+;     ........   row 1
+;     ..X..X..   row 2
+;     ...XX...   row 3
+;     ...XX...   row 4
+;     ..X..X..   row 5
+;     ........   row 6
+;     ........   row 7
+swarmer_sprite:
+    .byte 0x00, 0x00, 0x24, 0x18, 0x18, 0x24, 0x00, 0x00
+    .balign 2
+
 ; ============================================================================
 ; wave_sizes_table — total Lander spawns per (difficulty, wave). 8 columns
 ; indexed by min(wave_number-1, 7); 3 rows for LOW / MED / HIGH.
@@ -2693,6 +2953,16 @@ wave_sizes_table:
     .byte  5,  7,  8,  9, 10, 12, 12, 12      ; LOW  (gentle)
     .byte 10, 13, 14, 16, 18, 20, 20, 20      ; MED  (moderate)
     .byte 15, 20, 20, 20, 20, 20, 20, 20      ; HIGH (Defenduino-equivalent)
+    .balign 2
+
+; wave_pod_count_table — Pods (out of wave_to_spawn) per (difficulty, wave).
+; Pods spawn first; remaining wave_to_spawn count is Landers. Each Pod
+; killed becomes 5 Swarmers, so a single Pod adds substantial pressure
+; to the wave even if the table says "1".
+wave_pod_count_table:
+    .byte  0,  0,  0,  1,  1,  1,  2,  2      ; LOW
+    .byte  0,  0,  1,  1,  2,  2,  2,  3      ; MED
+    .byte  0,  1,  1,  2,  2,  3,  3,  3      ; HIGH
     .balign 2
 
 ; ============================================================================
