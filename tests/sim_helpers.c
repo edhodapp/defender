@@ -90,6 +90,8 @@ sim_t *sim_boot_no_warmup(const char *elf_path) {
     s->sym_enemies_alive  = sim_lookup(s, "enemies_alive");
     s->sym_difficulty     = sim_lookup(s, "difficulty");
     s->sym_skip_title_flag = sim_lookup(s, "skip_title_flag");
+    s->sym_lives          = sim_lookup(s, "lives");
+    s->sym_game_state     = sim_lookup(s, "game_state");
     s->sym_projectiles    = sim_lookup(s, "projectiles");
     s->sym_entities       = sim_lookup(s, "entities");
     s->sym_framebuffer    = sim_lookup(s, "framebuffer");
@@ -204,6 +206,13 @@ void sim_clear_state_minimal(sim_t *s) {
     sim_mem_w(s, s->sym_wave_number, 1);
     sim_mem_w(s, s->sym_wave_to_spawn, 8);
     sim_mem_w(s, s->sym_enemies_alive, 0);
+    // Restore the player to a fresh life count and clear any game-over
+    // latch. Without this, a test that triggers three ship deaths (or
+    // runs after one that did) would leave game_state=1 and main_loop
+    // would short-circuit to the game-over screen — entities, projectiles,
+    // and collisions would all stop updating.
+    sim_mem_w(s, s->sym_lives, 3);
+    sim_mem_w(s, s->sym_game_state, 0);
 }
 
 void sim_set_ship(sim_t *s, int sprite_y, int scroll, int facing) {

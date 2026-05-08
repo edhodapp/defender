@@ -45,11 +45,13 @@ wave_to_spawn:  .skip 1
 .global enemies_alive
 enemies_alive:  .skip 1
 
-; 16-bit score, low byte first (little-endian). 100 points per
-; Lander/Mutant kill. Wraps at 65535 — game-over score management is a
-; later concern.
+; 24-bit score, low byte first (little-endian). 100 points per
+; Lander/Mutant kill. Internal range 0..16M; the on-screen renderer
+; clamps display at 99999 (5 digits).
 .global score_lo
 score_lo:       .skip 1
+.global score_mid
+score_mid:      .skip 1
 .global score_hi
 score_hi:       .skip 1
 
@@ -58,9 +60,41 @@ score_hi:       .skip 1
 .global lives
 lives:          .skip 1
 
+; Score threshold of the next bonus-ship award (24-bit, matches score
+; width so comparisons stay correct past 65535). Starts at 10000.
+.global next_bonus_lo
+next_bonus_lo:  .skip 1
+.global next_bonus_mid
+next_bonus_mid: .skip 1
+.global next_bonus_hi
+next_bonus_hi:  .skip 1
+
+; Per-difficulty high scores, 24-bit each, indexed by difficulty
+; (0=LOW, 1=MED, 2=HIGH). Loaded from EEPROM at boot, written back
+; only on game-over transition when the current run beat the record.
+.global high_scores
+high_scores:    .skip 9
+
+; 0 = playing, 1 = game over (player out of lives; main_loop renders the
+; game-over screen and waits for B to soft-reset).
+.global game_state
+game_state:     .skip 1
+
 ; Difficulty (0=LOW, 1=MED, 2=HIGH). Wave sizes scale via wave_sizes_table.
 .global difficulty
 difficulty:     .skip 1
+
+; Title-screen cursor position (0=LOW, 1=MED, 2=HIGH, 3=RESET). Tracked
+; separately from `difficulty` because RESET is a fourth selectable row
+; that doesn't correspond to a play difficulty.
+.global title_selection
+title_selection: .skip 1
+
+; Frame counter for hold-B-to-reset on the title's RESET row. Reset to
+; 0 on every B-released frame; reaches 60 (~1 s @ 60 Hz) on a sustained
+; hold, at which point the table wipe fires once.
+.global reset_hold_frames
+reset_hold_frames: .skip 1
 
 ; Title-screen edge-detect buffer for input_read returns.
 .global prev_buttons
@@ -156,9 +190,11 @@ _reset:
     clr   r16
     sts   skip_title_flag, r16
 
-    rcall oled_init
-    rcall input_init
-    rcall audio_init
+    ; Early one-shots use 22-bit `call` because the firmware has grown
+    ; past the 13-bit rcall range from _reset to these external symbols.
+    call  oled_init
+    call  input_init
+    call  audio_init
 
     ldi   r24, 28
     sts   sprite_y, r24
@@ -199,15 +235,27 @@ _reset:
     sts   wave_number, r24
     sts   enemies_alive, r24
     sts   difficulty, r24                  ; 1 = MED
+    sts   title_selection, r24             ; cursor starts on MED
+    clr   r25
+    sts   reset_hold_frames, r25
     rcall lookup_wave_size                 ; r24 = wave 1 size for current difficulty
     dec   r24                              ; subtract the boot Lander
     sts   wave_to_spawn, r24
     ; Score starts at 0; lives starts at 3 (Defender convention).
     clr   r24
     sts   score_lo, r24
+    sts   score_mid, r24
     sts   score_hi, r24
+    sts   game_state, r24
     ldi   r24, 3
     sts   lives, r24
+    ; First bonus ship at 10000 points (24-bit threshold).
+    ldi   r24, lo8(10000)
+    sts   next_bonus_lo, r24
+    ldi   r24, hi8(10000)
+    sts   next_bonus_mid, r24
+    clr   r24
+    sts   next_bonus_hi, r24
 
     ; Spawn 8 Humanoids on the ground (slots 1..8) at world_x = 16, 48, 80, ...
     ldi   r28, lo8(entities + 1*ENTITY_SIZE)
@@ -247,6 +295,14 @@ hum_init_loop:
 
     sei                                    ; arm interrupts last
 
+    ; ---- EEPROM high-score bootstrap ----
+    ; EEPROM layout: byte 0 = magic 0xDF; bytes 1..9 = three 24-bit
+    ; high scores (LOW, MED, HIGH). On first boot (or after a wipe via
+    ; the title's RESET row), the magic is missing and the EEPROM cells
+    ; read 0xFF; we lay down a fresh 0xDF + 9 zero bytes. On every
+    ; subsequent boot we just slurp the 9 score bytes into BSS.
+    rcall eeprom_load_high_scores
+
     ; Splash screen — pick difficulty. Test harness can set skip_title_flag
     ; via sim_mem_w before warmup; on hardware, holding B at boot also
     ; bypasses for a quick-start (default difficulty stays MED).
@@ -266,7 +322,7 @@ skip_title_screen:
     ; Boot jingle — short ascending arpeggio. Plays during the first
     ; few main_loop iterations after the title is dismissed.
     ldi   r24, 5                           ; SFX_START
-    rcall audio_play
+    call  audio_play
 
 .global main_loop
 main_loop:
@@ -276,7 +332,17 @@ main_loop:
     sts   frame_counter, r25
 
     ; Advance any active SFX by one frame
-    rcall audio_tick
+    call  audio_tick
+
+    ; Game-over branch: if player is out of lives, render the GAME OVER
+    ; screen and wait for B to soft-reset back to title. Use the inverted
+    ; brne→rjmp pattern because main_game_over_path is well outside the
+    ; 7-bit conditional-branch range.
+    lds   r24, game_state
+    cpi   r24, 0
+    breq  main_alive
+    rjmp  main_game_over_path
+main_alive:
 
     ; Periodic Lander spawn: once per 256-frame counter cycle, fired at
     ; frame_counter == 128. ~4.3 s at 60 Hz — longer than a worst-case
@@ -290,7 +356,7 @@ main_loop:
     rcall try_spawn_lander
 no_spawn_check:
 
-    rcall input_read                     ; r24 = button bitmask
+    call  input_read                     ; r24 = button bitmask
 
     lds   r17, sprite_y
 
@@ -410,7 +476,7 @@ spawn_store_x:
     ldi   r25, FIRE_COOLDOWN_RELOAD
     sts   fire_cooldown, r25
     ldi   r24, 1                          ; SFX_FIRE
-    rcall audio_play
+    call  audio_play
 no_b_press:
 
     ; --- Update game entities (Landers, etc.) ---
@@ -426,7 +492,7 @@ no_b_press:
     lds   r24, pending_sfx
     cpi   r24, 0
     breq  no_pending_sfx
-    rcall audio_play
+    call  audio_play
     clr   r24
     sts   pending_sfx, r24
 no_pending_sfx:
@@ -451,7 +517,7 @@ wave_at_max:
     rcall lookup_wave_size
     sts   wave_to_spawn, r24
     ldi   r24, 6                         ; SFX_WAVE_CHANGE
-    rcall audio_play
+    call  audio_play
     ; Kick the new wave: spawn one immediately so the player sees a fresh
     ; enemy without waiting for the next periodic fc==128 tick.
     rcall try_spawn_lander
@@ -482,7 +548,7 @@ wave_in_progress:
     ; render may have overwritten r17 with another sprite's y).
     ldi   r16, 60
     lds   r17, sprite_y
-    rcall blit_8x8
+    call  blit_8x8
 
     ; --- Death flash: if active, invert the entire framebuffer ---
     rcall invert_if_dead
@@ -490,7 +556,19 @@ wave_in_progress:
     ; --- Render ---
     ldi   r30, lo8(framebuffer)
     ldi   r31, hi8(framebuffer)
-    rcall oled_render
+    call  oled_render
+
+    rjmp  ml_wait
+
+main_game_over_path:
+    rcall render_game_over
+    ldi   r30, lo8(framebuffer)
+    ldi   r31, hi8(framebuffer)
+    call  oled_render
+    call  input_read
+    sbrc  r24, 5                         ; B pressed?
+    rjmp  _reset                          ; soft reset → title screen
+    ; not pressed — fall through to ml_wait
 
     ; --- Frame cap: sleep until Timer1 says the next frame is due. ---
     ; The audio engine fires Timer3 interrupts mid-frame to drive PC7 in
@@ -717,13 +795,52 @@ blit_glyph:
     add   r30, r24
     ldi   r24, 0
     adc   r31, r24
-    rcall blit_8x8
+    call  blit_8x8
     ret
 
 blit_glyph_at_origin:
     ldi   r16, 0
     ldi   r17, 0
     rjmp  blit_glyph
+
+; ============================================================================
+; render_game_over: clear the framebuffer and draw "GAME" + "OVER" on
+; two stacked rows, plus the final score below. Player presses B to
+; soft-reset back into the title screen.
+; ============================================================================
+render_game_over:
+    rcall clear_fb
+    ; "GAME" at row 16, centered: 4 letters × 8 = 32 cols, x_start = 48.
+    ldi   r17, 16
+    ldi   r16, 48
+    ldi   r24, 11                                 ; G
+    rcall blit_glyph
+    subi  r16, -8
+    ldi   r24, FONT_A
+    rcall blit_glyph
+    subi  r16, -8
+    ldi   r24, 8                                  ; M
+    rcall blit_glyph
+    subi  r16, -8
+    ldi   r24, 1                                  ; E
+    rcall blit_glyph
+    ; "OVER" at row 32.
+    ldi   r17, 32
+    ldi   r16, 48
+    ldi   r24, 6                                  ; O
+    rcall blit_glyph
+    subi  r16, -8
+    ldi   r24, FONT_V
+    rcall blit_glyph
+    subi  r16, -8
+    ldi   r24, 1                                  ; E
+    rcall blit_glyph
+    subi  r16, -8
+    ldi   r24, 4                                  ; R
+    rcall blit_glyph
+    ; Final score in its normal top-right slot for closure.
+    rcall render_score
+    ret
 
 ; ============================================================================
 ; render_lives: draw up to 3 ship icons in cols 8/16/24 (between the
@@ -744,7 +861,7 @@ rl_have_count:
 rl_loop:
     ldi   r30, lo8(ship_right)
     ldi   r31, hi8(ship_right)
-    rcall blit_8x8
+    call  blit_8x8
     subi  r16, -8                        ; advance x by 8
     dec   r21
     brne  rl_loop
@@ -752,41 +869,52 @@ rl_done:
     ret
 
 ; ============================================================================
-; render_score: render the 16-bit score as 5 fixed-width digits at the
-; top-right corner of page 0. Each digit at +6 cols → 30 cols wide
-; starting at col 98 (= 128 - 30). Uses repeated subtraction for the
-; per-digit decimal extraction (no AVR HW divide).
+; render_score: render the 24-bit score as 5 fixed-width digits in the
+; top-right corner (page 0, row 0). Each digit at +6 cols → 30 cols wide
+; starting at col 99. The internal score range is 0..16M; display is
+; clamped at 99999. Thin wrapper around render_score_value.
 ; ============================================================================
 render_score:
     push  r2
     push  r3
+    push  r4
     lds   r2, score_lo
-    lds   r3, score_hi                   ; r3:r2 = score
-    ldi   r16, 99                        ; x cursor (digits 99/105/111/117/123;
-                                          ; LSD's data col 4 lands on col 127.
-                                          ; Last blit's padding cols 5-7 wrap
-                                          ; into fb page 1 cols 0-2 — but they
-                                          ; are 0x00 so the OR is a no-op.)
-    ; Digit 0: ten-thousands
+    lds   r3, score_mid
+    lds   r4, score_hi
+    ldi   r16, 99
+    ldi   r17, 0
+    rcall render_score_value
+    pop   r4
+    pop   r3
+    pop   r2
+    ret
+
+; ============================================================================
+; render_score_value: render the 24-bit value in r4:r3:r2 as 5 digits at
+; (r16, r17). Caller chooses location; used by render_score for in-game
+; HUD and by the title screen for the per-difficulty HI rows. Clamps
+; values >= 100000 to 99999.
+; ============================================================================
+render_score_value:
+    push  r2
+    push  r3
+    rcall clamp_score_24_to_99999        ; r3:r2 = min(value, 99999)
+    ; Digit 0..3 via repeated subtraction; r16/r17 kept across blit_glyph.
     ldi   r24, lo8(10000)
     ldi   r25, hi8(10000)
     rcall rs_extract_digit
-    ; Digit 1: thousands
     ldi   r24, lo8(1000)
     ldi   r25, hi8(1000)
     rcall rs_extract_digit
-    ; Digit 2: hundreds
     ldi   r24, 100
     ldi   r25, 0
     rcall rs_extract_digit
-    ; Digit 3: tens
     ldi   r24, 10
     ldi   r25, 0
     rcall rs_extract_digit
-    ; Digit 4: ones (just emit r2 as-is, since 0..9)
+    ; Digit 4: ones — r2 already in [0..9].
     mov   r24, r2
     subi  r24, -(FONT_DIGIT_BASE)
-    ldi   r17, 0
     rcall blit_glyph
     pop   r3
     pop   r2
@@ -813,7 +941,6 @@ red_done:
     push  r25
     mov   r24, r18
     subi  r24, -(FONT_DIGIT_BASE)
-    ldi   r17, 0
     rcall blit_glyph
     pop   r25
     pop   r24
@@ -821,6 +948,207 @@ red_done:
     pop   r3
     pop   r2
     subi  r16, -6                        ; advance x by 6 px
+    ret
+
+; ============================================================================
+; clamp_score_24_to_99999: r4:r3:r2 in -> r3:r2 out, clamped to 99999.
+; If the 24-bit value exceeds 99999, replace with 99999. Used by
+; render_score / render_score_value before the existing 16-bit decimal
+; extraction. r4 is dropped on return; only the 16-bit remainder matters.
+; Clobbers: r0, r1, r4, r24, r25, r26.
+; ============================================================================
+clamp_score_24_to_99999:
+    ; Compare against 99999 = 0x0186A0 (lo=0xA0, mid=0x86, hi=0x01).
+    ldi   r24, 0xA0
+    ldi   r25, 0x86
+    ldi   r26, 0x01
+    cp    r2, r24
+    cpc   r3, r25
+    cpc   r4, r26
+    brsh  cs_clamp                       ; >= 99999 -> clamp
+    ret
+cs_clamp:
+    ldi   r24, 0xA0
+    ldi   r25, 0x86
+    mov   r2, r24
+    mov   r3, r25
+    ret
+
+; ============================================================================
+; EEPROM persistence for the per-difficulty high-score table.
+; Layout (10 bytes starting at EEPROM addr 0):
+;   0     : EEPROM_MAGIC (0xDF)
+;   1..3  : HI_LOW  (24-bit lo/mid/hi)
+;   4..6  : HI_MED
+;   7..9  : HI_HIGH
+; The magic byte distinguishes our data from virgin EEPROM (0xFF) and
+; from data left by an unrelated firmware. Writers always touch only
+; what changed, never the whole block — bonus-ship bumps don't burn
+; cells.
+; ============================================================================
+.equ EEPROM_MAGIC, 0xDF
+
+; eeprom_load_high_scores: at boot, validate magic and either lay down a
+; fresh empty table or copy the 9 score bytes into BSS.
+; Clobbers: r22, r23, r24, r25, X.
+.global eeprom_load_high_scores
+eeprom_load_high_scores:
+    ldi   r24, 0
+    ldi   r25, 0
+    rcall eeprom_read_byte               ; r24 = magic
+    cpi   r24, EEPROM_MAGIC
+    breq  ehs_load
+    ; Fresh / corrupted table: write magic + 9 zero score bytes, then
+    ; fall through to load (which will see all zeros).
+    ldi   r24, 0
+    ldi   r25, 0
+    ldi   r22, EEPROM_MAGIC
+    rcall eeprom_write_byte
+    ldi   r23, 9                         ; remaining bytes to clear
+    ldi   r24, 1
+    ldi   r25, 0
+ehs_init_loop:
+    push  r23
+    push  r24
+    push  r25
+    ldi   r22, 0
+    rcall eeprom_write_byte
+    pop   r25
+    pop   r24
+    pop   r23
+    adiw  r24, 1
+    dec   r23
+    brne  ehs_init_loop
+ehs_load:
+    ; Read 9 bytes from EEPROM addr 1..9 into high_scores[0..8].
+    ldi   r26, lo8(high_scores)
+    ldi   r27, hi8(high_scores)
+    ldi   r23, 9
+    ldi   r24, 1
+    ldi   r25, 0
+ehs_load_loop:
+    push  r23
+    push  r24
+    push  r25
+    push  r26
+    push  r27
+    rcall eeprom_read_byte               ; r24 = byte
+    pop   r27
+    pop   r26
+    st    X+, r24
+    pop   r25
+    pop   r24
+    pop   r23
+    adiw  r24, 1
+    dec   r23
+    brne  ehs_load_loop
+    ret
+
+; eeprom_save_high_score_for_difficulty: write back the 3-byte slot for
+; the difficulty given in r24 (0/1/2). Reads the current values from
+; the high_scores BSS (caller updates BSS first, then calls this).
+; Clobbers: r0..r3, r22..r27, X.
+.global eeprom_save_high_score_for_difficulty
+eeprom_save_high_score_for_difficulty:
+    ; offset_in_bss   = diff * 3
+    ; eeprom_addr     = 1 + diff * 3
+    mov   r18, r24
+    lsl   r24
+    add   r24, r18                       ; r24 = diff * 3
+    ldi   r26, lo8(high_scores)
+    ldi   r27, hi8(high_scores)
+    add   r26, r24
+    ldi   r18, 0
+    adc   r27, r18                       ; X -> high_scores[diff*3]
+    inc   r24                            ; +1 to skip magic byte
+    ldi   r25, 0
+    ldi   r23, 3                         ; 3 bytes to write
+ehssh_loop:
+    push  r23
+    push  r24
+    push  r25
+    push  r26
+    push  r27
+    ld    r22, X
+    rcall eeprom_write_byte
+    pop   r27
+    pop   r26
+    adiw  r26, 1
+    pop   r25
+    pop   r24
+    pop   r23
+    adiw  r24, 1
+    dec   r23
+    brne  ehssh_loop
+    ret
+
+; maybe_save_high_score: called once on the game-over transition. If the
+; just-finished run's score exceeds the stored high score for the
+; current difficulty, update both BSS and EEPROM. No-op otherwise.
+; Clobbers: r0..r4, r18..r27, X.
+.global maybe_save_high_score
+maybe_save_high_score:
+    ; X = high_scores + difficulty * 3
+    lds   r24, difficulty
+    mov   r18, r24
+    lsl   r24
+    add   r24, r18
+    ldi   r26, lo8(high_scores)
+    ldi   r27, hi8(high_scores)
+    add   r26, r24
+    ldi   r18, 0
+    adc   r27, r18
+    ; Compare current score (24-bit) against record at X.
+    lds   r2, score_lo
+    lds   r3, score_mid
+    lds   r4, score_hi
+    ld    r19, X+
+    ld    r20, X+
+    ld    r21, X
+    ; If score > record, store. Use cp/cpc on (record - score); branch if
+    ; record < score (i.e., record was strictly less).
+    cp    r19, r2
+    cpc   r20, r3
+    cpc   r21, r4
+    brsh  mshs_done                       ; record >= score → no update
+    sbiw  r26, 2                          ; rewind X to base
+    st    X+, r2
+    st    X+, r3
+    st    X, r4
+    ; Persist the updated 3-byte slot via EEPROM.
+    lds   r24, difficulty
+    rcall eeprom_save_high_score_for_difficulty
+mshs_done:
+    ret
+
+; eeprom_wipe_high_scores: zero the BSS table and re-write all 9 score
+; bytes in EEPROM (magic preserved). Used by the title's RESET row.
+; Clobbers: r22..r27, X.
+.global eeprom_wipe_high_scores
+eeprom_wipe_high_scores:
+    ldi   r26, lo8(high_scores)
+    ldi   r27, hi8(high_scores)
+    ldi   r23, 9
+    clr   r24
+ehw_zero_bss:
+    st    X+, r24
+    dec   r23
+    brne  ehw_zero_bss
+    ldi   r23, 9
+    ldi   r24, 1
+    ldi   r25, 0
+ehw_loop:
+    push  r23
+    push  r24
+    push  r25
+    ldi   r22, 0
+    rcall eeprom_write_byte
+    pop   r25
+    pop   r24
+    pop   r23
+    adiw  r24, 1
+    dec   r23
+    brne  ehw_loop
     ret
 
 ; ============================================================================
@@ -968,7 +1296,7 @@ blit_letter:
     rol   r31
     subi  r30, lo8(-(font_table))
     sbci  r31, hi8(-(font_table))
-    rcall blit_8x8
+    call  blit_8x8
     pop   r17
     pop   r16
     subi  r16, -8                          ; advance x by 8
@@ -976,12 +1304,14 @@ blit_letter:
 
 ; render_title: clear-then-paint of the splash screen.
 ;   Row  8-15: "DEFENDER" centered (cols 32..95)
-;   Row 24-31: "LOW"  at col 52
-;   Row 32-39: "MED"  at col 52
-;   Row 40-47: "HIGH" at col 48
-;   Selector arrow at col 44, y = 24 + difficulty*8.
+;   Row 24-31: "LOW   xxxxx"   (label x=28, hi-score 5 digits at x=72)
+;   Row 32-39: "MED   xxxxx"
+;   Row 40-47: "HIGH  xxxxx"
+;   Row 48-55: "RESET"
+;   Selector arrow at col 20, y = 24 + title_selection*8.
 render_title:
     rcall clear_fb
+    ; --- DEFENDER header ---
     ldi   r16, 32
     ldi   r17, 8
     ldi   r24, 0
@@ -1000,7 +1330,8 @@ render_title:
     rcall blit_letter
     ldi   r24, 4
     rcall blit_letter
-    ldi   r16, 52
+    ; --- LOW row + HI score for difficulty 0 ---
+    ldi   r16, 28
     ldi   r17, 24
     ldi   r24, 5
     rcall blit_letter
@@ -1008,7 +1339,14 @@ render_title:
     rcall blit_letter
     ldi   r24, 7
     rcall blit_letter
-    ldi   r16, 52
+    lds   r2, high_scores + 0
+    lds   r3, high_scores + 1
+    lds   r4, high_scores + 2
+    ldi   r16, 72
+    ldi   r17, 24
+    rcall render_score_value
+    ; --- MED row + HI score for difficulty 1 ---
+    ldi   r16, 28
     ldi   r17, 32
     ldi   r24, 8
     rcall blit_letter
@@ -1016,7 +1354,14 @@ render_title:
     rcall blit_letter
     ldi   r24, 0
     rcall blit_letter
-    ldi   r16, 48
+    lds   r2, high_scores + 3
+    lds   r3, high_scores + 4
+    lds   r4, high_scores + 5
+    ldi   r16, 72
+    ldi   r17, 32
+    rcall render_score_value
+    ; --- HIGH row + HI score for difficulty 2 ---
+    ldi   r16, 28
     ldi   r17, 40
     ldi   r24, 9
     rcall blit_letter
@@ -1026,15 +1371,34 @@ render_title:
     rcall blit_letter
     ldi   r24, 9
     rcall blit_letter
-    ; Arrow at (44, 24 + difficulty*8)
-    ldi   r16, 44
-    lds   r24, difficulty
+    lds   r2, high_scores + 6
+    lds   r3, high_scores + 7
+    lds   r4, high_scores + 8
+    ldi   r16, 72
+    ldi   r17, 40
+    rcall render_score_value
+    ; --- RESET row ---
+    ldi   r16, 28
+    ldi   r17, 48
+    ldi   r24, 4                            ; R
+    rcall blit_letter
+    ldi   r24, 1                            ; E
+    rcall blit_letter
+    ldi   r24, FONT_S
+    rcall blit_letter
+    ldi   r24, 1                            ; E
+    rcall blit_letter
+    ldi   r24, FONT_T
+    rcall blit_letter
+    ; --- Selector arrow at col 20, y = 24 + selection*8 ---
+    ldi   r16, 20
+    lds   r24, title_selection
     lsl   r24
     lsl   r24
     lsl   r24
-    subi  r24, -24                         ; r24 = 24 + difficulty*8
+    subi  r24, -24
     mov   r17, r24
-    ldi   r24, 12
+    ldi   r24, 12                           ; ARROW
     rcall blit_letter
     ret
 
@@ -1044,34 +1408,69 @@ render_title:
 title_loop:
     clr   r24
     sts   prev_buttons, r24
+    sts   reset_hold_frames, r24
 title_frame:
     rcall render_title
     ldi   r30, lo8(framebuffer)
     ldi   r31, hi8(framebuffer)
-    rcall oled_render
-    rcall input_read                       ; r24 = current pressed mask
+    call  oled_render
+    call  input_read                       ; r24 = current pressed mask
+    mov   r18, r24                         ; r18 = current mask (kept for hold check)
     lds   r17, prev_buttons
     sts   prev_buttons, r24
-    com   r17                              ; r17 = ~prev
-    and   r17, r24                         ; r17 = newly-pressed bits
-    sbrs  r17, 0                           ; UP press? (bit 0)
+    com   r17
+    and   r17, r24                         ; r17 = newly-pressed edges
+
+    ; UP edge: move selector up (clamp at 0)
+    sbrs  r17, 0
     rjmp  title_no_up
-    lds   r25, difficulty
+    lds   r25, title_selection
     cpi   r25, 0
     breq  title_no_up
     dec   r25
-    sts   difficulty, r25
+    sts   title_selection, r25
 title_no_up:
-    sbrs  r17, 1                           ; DOWN press?
+    ; DOWN edge: move selector down (clamp at 3)
+    sbrs  r17, 1
     rjmp  title_no_down
-    lds   r25, difficulty
-    cpi   r25, 2
+    lds   r25, title_selection
+    cpi   r25, 3
     brsh  title_no_down
     inc   r25
-    sts   difficulty, r25
+    sts   title_selection, r25
 title_no_down:
-    sbrs  r17, 5                           ; B press → confirm
+    ; B handling. On RESET row (selection==3) we use a hold-counter so
+    ; an accidental tap can't wipe the table. On the difficulty rows
+    ; the existing edge-press confirms immediately.
+    lds   r25, title_selection
+    cpi   r25, 3
+    brne  title_confirm_check
+
+    ; RESET row: count consecutive frames with B held; at 60 frames,
+    ; wipe and reset the counter so the action fires once per hold.
+    sbrs  r18, 5                           ; B not held → reset counter
+    rjmp  title_reset_clear
+    lds   r25, reset_hold_frames
+    cpi   r25, 60
+    brsh  title_wait                       ; already fired this hold
+    inc   r25
+    sts   reset_hold_frames, r25
+    cpi   r25, 60
+    brne  title_wait
+    rcall eeprom_wipe_high_scores
     rjmp  title_wait
+title_reset_clear:
+    clr   r25
+    sts   reset_hold_frames, r25
+    rjmp  title_wait
+
+title_confirm_check:
+    ; Difficulty row (0..2): B edge-press confirms — set difficulty
+    ; from selection and exit.
+    sbrs  r17, 5
+    rjmp  title_wait
+    lds   r25, title_selection
+    sts   difficulty, r25
     ret
 title_wait:
     sleep
@@ -1309,13 +1708,39 @@ chh_dec_enemy:
     dec   r25
     sts   enemies_alive, r25
 chh_dec_done:
-    ; Award 100 points per Lander/Mutant kill (16-bit add to score).
+    ; Award 100 points per Lander/Mutant kill (24-bit add to score).
+    ; Two's-complement -100 in 24 bits = 0xFFFF9C.
     lds   r24, score_lo
-    lds   r25, score_hi
-    subi  r24, lo8(-100)                 ; subi rd, -100 == add 100
-    sbci  r25, hi8(-100)
+    lds   r25, score_mid
+    lds   r26, score_hi
+    subi  r24, 0x9C
+    sbci  r25, 0xFF
+    sbci  r26, 0xFF
     sts   score_lo, r24
-    sts   score_hi, r25
+    sts   score_mid, r25
+    sts   score_hi, r26
+    ; Bonus-ship check: 24-bit compare against next_bonus.
+    lds   r18, next_bonus_lo
+    lds   r19, next_bonus_mid
+    lds   r20, next_bonus_hi
+    cp    r24, r18
+    cpc   r25, r19
+    cpc   r26, r20
+    brlo  chh_no_bonus
+    lds   r24, lives
+    inc   r24
+    sts   lives, r24
+    ; next_bonus += 10000 (24-bit add). -10000 in 24 bits = 0xFFD8F0.
+    lds   r24, next_bonus_lo
+    lds   r25, next_bonus_mid
+    lds   r26, next_bonus_hi
+    subi  r24, 0xF0
+    sbci  r25, 0xD8
+    sbci  r26, 0xFF
+    sts   next_bonus_lo, r24
+    sts   next_bonus_mid, r25
+    sts   next_bonus_hi, r26
+chh_no_bonus:
     ret
 
 ; ============================================================================
@@ -1373,12 +1798,24 @@ sc_check:
     cpi   r26, 8
     brsh  sc_next
     ; HIT — reset ship, arm flash, queue SFX_DEATH; main_loop drains after.
+    ; Decrement lives; if zero, transition to game-over state.
     ldi   r25, 28
     sts   sprite_y, r25
     ldi   r25, 8
     sts   death_flash, r25
     ldi   r25, 3                          ; SFX_DEATH (overrides any pending HIT)
     sts   pending_sfx, r25
+    lds   r25, lives
+    cpi   r25, 0
+    breq  sc_hit_done                     ; already 0, shouldn't happen but safe
+    dec   r25
+    sts   lives, r25
+    cpi   r25, 0
+    brne  sc_hit_done
+    ldi   r25, 1
+    sts   game_state, r25                 ; out of lives → game over
+    rcall maybe_save_high_score           ; persist if this run beat the record
+sc_hit_done:
     ret
 sc_next:
     adiw  r28, ENTITY_SIZE
@@ -1855,7 +2292,7 @@ render_lander:
     push  r22
     ldi   r30, lo8(lander_sprite)
     ldi   r31, hi8(lander_sprite)
-    rcall blit_8x8
+    call  blit_8x8
     pop   r22
     pop   r21
     pop   r20
@@ -1869,7 +2306,7 @@ render_lander:
     mov   r16, r20
     ldi   r30, lo8(humanoid_sprite)
     ldi   r31, hi8(humanoid_sprite)
-    rcall blit_8x8
+    call  blit_8x8
 rl_offscreen:
     ret
 
@@ -1888,7 +2325,7 @@ render_mutant:
     mov   r17, r21
     ldi   r30, lo8(mutant_sprite)
     ldi   r31, hi8(mutant_sprite)
-    rcall blit_8x8
+    call  blit_8x8
 rm_offscreen:
     ret
 
@@ -1908,7 +2345,7 @@ render_humanoid:
     mov   r17, r21
     ldi   r30, lo8(humanoid_sprite)
     ldi   r31, hi8(humanoid_sprite)
-    rcall blit_8x8
+    call  blit_8x8
 rh_offscreen:
     ret
 
@@ -1996,9 +2433,19 @@ font_table:
     .byte 0x01, 0x01, 0x79, 0x05, 0x03, 0x00, 0x00, 0x00   ; 20 '7'
     .byte 0x36, 0x49, 0x49, 0x49, 0x36, 0x00, 0x00, 0x00   ; 21 '8'
     .byte 0x0E, 0x51, 0x51, 0x51, 0x7E, 0x00, 0x00, 0x00   ; 22 '9'
+    .byte 0x7E, 0x09, 0x09, 0x09, 0x7E, 0x00, 0x00, 0x00   ; 23 A
+    .byte 0x1F, 0x20, 0x40, 0x20, 0x1F, 0x00, 0x00, 0x00   ; 24 V
+    .byte 0x46, 0x49, 0x49, 0x49, 0x31, 0x00, 0x00, 0x00   ; 25 S
+    .byte 0x3E, 0x41, 0x41, 0x41, 0x22, 0x00, 0x00, 0x00   ; 26 C
+    .byte 0x01, 0x01, 0x7F, 0x01, 0x01, 0x00, 0x00, 0x00   ; 27 T
     .balign 2
 
 .equ FONT_DIGIT_BASE, 13                              ; index of '0' in font_table
+.equ FONT_A,          23
+.equ FONT_V,          24
+.equ FONT_S,          25
+.equ FONT_C,          26
+.equ FONT_T,          27
 
 ; ============================================================================
 ; Ship sprites (per ship_shape.txt). Drawn in framebuffer-column order;
