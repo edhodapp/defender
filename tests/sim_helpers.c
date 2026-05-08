@@ -92,6 +92,8 @@ sim_t *sim_boot_no_warmup(const char *elf_path) {
     s->sym_skip_title_flag = sim_lookup(s, "skip_title_flag");
     s->sym_lives          = sim_lookup(s, "lives");
     s->sym_game_state     = sim_lookup(s, "game_state");
+    s->sym_respawn_invuln = sim_lookup(s, "respawn_invuln");
+    s->sym_death_y        = sim_lookup(s, "death_y");
     s->sym_projectiles    = sim_lookup(s, "projectiles");
     s->sym_entities       = sim_lookup(s, "entities");
     s->sym_framebuffer    = sim_lookup(s, "framebuffer");
@@ -213,6 +215,7 @@ void sim_clear_state_minimal(sim_t *s) {
     // and collisions would all stop updating.
     sim_mem_w(s, s->sym_lives, 3);
     sim_mem_w(s, s->sym_game_state, 0);
+    sim_mem_w(s, s->sym_respawn_invuln, 0);
 }
 
 void sim_set_ship(sim_t *s, int sprite_y, int scroll, int facing) {

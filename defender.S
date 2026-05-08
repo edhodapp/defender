@@ -22,6 +22,26 @@ scroll_offset:  .skip 1                  ; world column at framebuffer col 0
 frame_counter:  .skip 1                  ; increments every frame; used as a divider for slow-drift entities
 .global death_flash
 death_flash:    .skip 1                  ; non-zero → invert framebuffer this frame, then decrement
+
+; Extended ship-death state: counts down from 90 to 0 once per frame
+; while the ship is dying or recovering.
+;   90..61  = explosion phase (30 frames). Ship hidden, fragments
+;             render outward from (64, death_y+4), input suppressed,
+;             collisions disabled.
+;   60..1   = respawn-blink phase (60 frames). Ship visible at
+;             (60, sprite_y) but blinks every 8 frames; input enabled,
+;             collisions still disabled (player can reposition without
+;             instant re-death from the same enemy).
+;   0       = normal play.
+.global respawn_invuln
+respawn_invuln: .skip 1
+
+; Ship's y at the moment of the fatal collision — frozen as the
+; explosion's vertical center. sprite_y itself is reset to 28 on
+; death so the ship respawns at the default altitude after the
+; explosion clears.
+.global death_y
+death_y:        .skip 1
 .global spawn_pos_idx
 spawn_pos_idx:  .skip 1                  ; advances each lander spawn; world_x = idx*32 + 16
 
@@ -371,6 +391,16 @@ main_loop:
     rjmp  main_game_over_path
 main_alive:
 
+    ; Tick the extended respawn-invuln counter. While > 0 the ship is
+    ; either exploding (>60) or blinking (<=60); either way collisions
+    ; are suppressed by ship_collision_check.
+    lds   r25, respawn_invuln
+    cpi   r25, 0
+    breq  ri_tick_done
+    dec   r25
+    sts   respawn_invuln, r25
+ri_tick_done:
+
     ; Periodic Lander spawn: once per 256-frame counter cycle, fired at
     ; frame_counter == 128. ~4.3 s at 60 Hz — longer than a worst-case
     ; humanoid fall (160 frames from y=8 to y=48), so a freed humanoid
@@ -384,6 +414,13 @@ main_alive:
 no_spawn_check:
 
     call  input_read                     ; r24 = button bitmask
+    ; Suppress all input during the explosion phase (respawn_invuln in
+    ; (60, 90]) — the player has no ship to control yet.
+    lds   r25, respawn_invuln
+    cpi   r25, 61
+    brlo  input_passthrough
+    clr   r24
+input_passthrough:
 
     lds   r17, sprite_y
 
@@ -560,7 +597,18 @@ wave_in_progress:
     rcall render_projectiles
     rcall render_entities
 
-    ; --- Pick sprite by facing: Z = ship_right + facing*8 ---
+    ; --- Ship / explosion rendering, gated on respawn_invuln phase ---
+    lds   r25, respawn_invuln
+    cpi   r25, 0
+    breq  draw_ship_normal               ; not dying → normal blit
+    cpi   r25, 61
+    brsh  draw_explosion_phase           ; 61..90 → fragments, no ship
+    ; 1..60: blink. Skip the ship every other 8-frame slot so the
+    ; player sees a 4-Hz flicker that signals "you're invulnerable".
+    sbrc  r25, 3
+    rjmp  skip_ship_render
+draw_ship_normal:
+    ; Z = ship_right + facing*8
     lds   r25, ship_facing
     ldi   r30, lo8(ship_right)
     ldi   r31, hi8(ship_right)
@@ -570,12 +618,15 @@ wave_in_progress:
     add   r30, r25
     ldi   r25, 0
     adc   r31, r25
-
-    ; --- Blit ship: x locked at 60, y from sprite_y (reload — entity
+    ; Blit ship: x locked at 60, y from sprite_y (reload — entity
     ; render may have overwritten r17 with another sprite's y).
     ldi   r16, 60
     lds   r17, sprite_y
     call  blit_8x8
+    rjmp  skip_ship_render
+draw_explosion_phase:
+    rcall render_explosion
+skip_ship_render:
 
     ; --- Death flash: if active, invert the entire framebuffer ---
     rcall invert_if_dead
@@ -1839,11 +1890,17 @@ lbi_med:
 ; Clobbers: r17, r18, r24, r25, r26, r27, Y
 ; ============================================================================
 ship_collision_check:
-    ; Skip while we're already dying — death_flash counts the death animation
-    ; down; re-arming each frame would freeze the SFX at sound_frame=0.
+    ; Skip while the ship is dying or respawning. death_flash is the short
+    ; screen-flash window; respawn_invuln is the longer explosion + blink
+    ; window. Either being non-zero means the ship is non-collidable.
     lds   r24, death_flash
     cpi   r24, 0
-    breq  sc_alive
+    brne  sc_skip
+    lds   r24, respawn_invuln
+    cpi   r24, 0
+    brne  sc_skip
+    rjmp  sc_alive
+sc_skip:
     ret
 sc_alive:
     lds   r17, sprite_y
@@ -1885,12 +1942,18 @@ sc_typed:
 sc_check:
     cpi   r26, 8
     brsh  sc_next
-    ; HIT — reset ship, arm flash, queue SFX_DEATH; main_loop drains after.
-    ; Decrement lives; if zero, transition to game-over state.
+    ; HIT — capture death_y for the explosion center, reset sprite_y so
+    ; the ship reappears at the default altitude after the explosion,
+    ; arm the screen flash AND the extended respawn-invuln window, queue
+    ; SFX_DEATH. main_loop drains after.
+    lds   r25, sprite_y
+    sts   death_y, r25
     ldi   r25, 28
     sts   sprite_y, r25
     ldi   r25, 8
     sts   death_flash, r25
+    ldi   r25, 90
+    sts   respawn_invuln, r25
     ldi   r25, 3                          ; SFX_DEATH (overrides any pending HIT)
     sts   pending_sfx, r25
     lds   r25, lives
@@ -1914,7 +1977,9 @@ sc_hit_done:
 sc_next:
     adiw  r28, ENTITY_SIZE
     dec   r18
-    brne  sc_loop
+    breq  sc_loop_done                   ; 7-bit cond → nearby label
+    rjmp  sc_loop                        ; rjmp's 12-bit range fits
+sc_loop_done:
     ret
 
 ; ============================================================================
@@ -1944,6 +2009,125 @@ ifd_inner:
     brne  ifd_outer
 ifd_done:
     ret
+
+; ============================================================================
+; render_explosion: draw 8 fragments radiating from (64, death_y+4) based
+; on respawn_invuln. Only renders during the explosion phase
+; (respawn_invuln in [61, 90]); caller has already gated on this. Each
+; fragment is a single pixel; per-frame extent = (90 - respawn_invuln + 1)
+; pixels along its (dx, dy) direction. Off-screen fragments are skipped.
+;
+; Clobbers: r0, r1, r16, r17, r18, r19, r20, r21, r24, r25, r26, r27, X, Y, Z.
+; ============================================================================
+render_explosion:
+    lds   r18, respawn_invuln
+    ldi   r19, 91
+    sub   r19, r18                       ; r19 = frame_num (1..30)
+    lds   r20, death_y
+    subi  r20, -4                        ; r20 = cy (=death_y + 4)
+    ldi   r21, 8                         ; fragment count
+    ldi   r16, 0                         ; fragment index 0..7
+rex_loop:
+    ; Z = explosion_velocity_table + fragment_idx * 2
+    ldi   r30, lo8(explosion_velocity_table)
+    ldi   r31, hi8(explosion_velocity_table)
+    mov   r17, r16
+    lsl   r17                            ; idx * 2 bytes per entry
+    add   r30, r17
+    ldi   r17, 0
+    adc   r31, r17
+    lpm   r17, Z+                        ; r17 = signed dx
+    lpm   r18, Z                         ; r18 = signed dy
+
+    ; signed_x = 64 + dx * t
+    muls  r17, r19                       ; r1:r0 = signed dx * t
+    ldi   r25, 64
+    add   r0, r25
+    ldi   r25, 0
+    adc   r1, r25
+    mov   r24, r0
+    mov   r25, r1
+    clr   r1                             ; restore zero-reg
+    cpi   r25, 0
+    brne  rex_skip                       ; signed off-screen (negative or > 255)
+    cpi   r24, 128
+    brsh  rex_skip                       ; >= 128 off-screen
+    push  r24                            ; stash x
+
+    ; signed_y = cy + dy * t
+    muls  r18, r19                       ; r1:r0 = signed dy * t
+    add   r0, r20
+    ldi   r25, 0
+    adc   r1, r25
+    mov   r24, r0
+    mov   r25, r1
+    clr   r1
+    pop   r26                            ; r26 = x (saved earlier)
+    cpi   r25, 0
+    brne  rex_skip
+    cpi   r24, 64
+    brsh  rex_skip
+    ; setpixel(x=r26, y=r24)
+    mov   r25, r24
+    mov   r24, r26
+    rcall setpixel
+rex_skip:
+    inc   r16
+    dec   r21
+    brne  rex_loop
+    ret
+
+; ============================================================================
+; setpixel: OR a single pixel into the framebuffer at (x=r24, y=r25).
+; Caller must range-check (x < 128, y < 64). Used by render_explosion.
+; Clobbers: r0, r1, r26, r27, r30, r31.
+; ============================================================================
+setpixel:
+    ; offset = (y >> 3) * 128 + x
+    mov   r26, r25
+    lsr   r26
+    lsr   r26
+    lsr   r26                            ; r26 = page (0..7)
+    ldi   r27, 128
+    mul   r26, r27                       ; r1:r0 = page * 128
+    ldi   r30, lo8(framebuffer)
+    ldi   r31, hi8(framebuffer)
+    add   r30, r0
+    adc   r31, r1
+    clr   r1
+    add   r30, r24
+    ldi   r27, 0
+    adc   r31, r27
+    ; mask = 1 << (y & 7)
+    mov   r26, r25
+    andi  r26, 7
+    ldi   r27, 1
+sp_shift:
+    cpi   r26, 0
+    breq  sp_or
+    lsl   r27
+    dec   r26
+    rjmp  sp_shift
+sp_or:
+    ld    r24, Z
+    or    r24, r27
+    st    Z, r24
+    ret
+
+; Eight unit-direction vectors covering compass octants. Speeds chosen
+; so the explosion's outermost fragments traverse ~60-90 pixels over
+; the 30-frame burst — visibly leaving the screen, matching the
+; Williams-style "kaboom" feel rather than a contained puff.
+explosion_velocity_table:
+    .byte  3,  0    ; E
+    .byte  2,  2    ; SE
+    .byte  0,  3    ; S
+    .byte -2,  2    ; SW
+    .byte -3,  0    ; W
+    .byte -2, -2    ; NW
+    .byte  0, -3    ; N
+    .byte  2, -2    ; NE
+    .balign 2
 
 ; ============================================================================
 ; update_entities: iterate the entity slots; for each active one, dispatch

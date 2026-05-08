@@ -20,8 +20,10 @@ static const uint8_t ship_right[8] = {
     0x18, 0x3C, 0x3C, 0x38, 0x30, 0x30, 0x10, 0x10
 };
 
-static int lives(void)      { return sim_mem_r(S, S->sym_lives); }
-static int game_state(void) { return sim_mem_r(S, S->sym_game_state); }
+static int lives(void)          { return sim_mem_r(S, S->sym_lives); }
+static int game_state(void)     { return sim_mem_r(S, S->sym_game_state); }
+static int respawn_invuln(void) { return sim_mem_r(S, S->sym_respawn_invuln); }
+static int death_y(void)        { return sim_mem_r(S, S->sym_death_y); }
 
 static uint32_t read24(uint16_t lo, uint16_t mid, uint16_t hi) {
     return (uint32_t)sim_mem_r(S, lo)
@@ -66,12 +68,14 @@ static void test_collision_decrements_lives(void) {
                   game_state());
 }
 
-// ship_collision_check early-exits when death_flash > 0 (the death-flash
-// invulnerability window). For lifecycle tests we want sequential hits,
-// so we clear death_flash to 0 before each frame to keep the ship
-// vulnerable.
+// ship_collision_check early-exits while either death_flash (the
+// 8-frame screen-flash window) OR respawn_invuln (the 90-frame
+// extended explosion + blink window) is non-zero. For lifecycle
+// tests we want sequential hits, so we clear both before each
+// frame to keep the ship vulnerable.
 static void hit_frame(void) {
     sim_mem_w(S, S->sym_death_flash, 0);
+    sim_mem_w(S, S->sym_respawn_invuln, 0);
     quiet_run();
 }
 
@@ -90,6 +94,69 @@ static void test_three_hits_to_game_over(void) {
                   "after hit 3: lives=%d (want 0)", lives());
     SIM_CHECK_MSG(game_state() == 1,
                   "after hit 3: game_state=%d (want 1)", game_state());
+}
+
+// On collision, respawn_invuln is armed to 90 and decremented once
+// per frame. While > 0 it suppresses ship_collision_check, which is
+// what stops the multi-collision-in-half-a-second bug we shipped
+// before extending the death window.
+static void test_collision_arms_respawn_invuln(void) {
+    scenario(28, 0);
+    sim_place_lander(S, 0, 60, 28);
+    sim_run_frame(S);                                     // collision frame
+    // The collision sets respawn_invuln=90 inside sc_check; main_alive's
+    // tick at the top of the frame doesn't run yet for THIS frame
+    // (collision happens after the tick), but the next frame's tick
+    // will dec it. So 90 is set, then... actually main_alive ticks at
+    // top, so on the NEXT frame's entry it will dec to 89. After this
+    // first collision frame, value is 90 — collision happened after
+    // the tick.
+    SIM_CHECK_MSG(respawn_invuln() == 90,
+                  "respawn_invuln after collision = %d (want 90)",
+                  respawn_invuln());
+    SIM_CHECK_MSG(death_y() == 28,
+                  "death_y captured = %d (want 28)", death_y());
+}
+
+static void test_respawn_invuln_decrements_per_frame(void) {
+    scenario(28, 0);
+    sim_place_lander(S, 0, 60, 28);
+    sim_run_frame(S);                                     // arm
+    SIM_CHECK(respawn_invuln() == 90);
+    // Remove the lander so it can't re-arm.
+    sim_clear_entities(S);
+    sim_run_frame(S);
+    SIM_CHECK_MSG(respawn_invuln() == 89,
+                  "after 1 tick, respawn_invuln = %d (want 89)",
+                  respawn_invuln());
+    for (int i = 0; i < 10; i++) sim_run_frame(S);
+    SIM_CHECK_MSG(respawn_invuln() == 79,
+                  "after 11 ticks, respawn_invuln = %d (want 79)",
+                  respawn_invuln());
+}
+
+// While respawn_invuln > 0, an overlapping enemy must NOT decrement
+// lives. This is the actual bug Ed reported on hardware: a single
+// approach by a Lander would chew through 3 lives in under a second
+// because the old 8-frame death_flash window expired before the
+// player could reposition.
+static void test_respawn_invuln_blocks_re_collision(void) {
+    scenario(28, 0);
+    sim_place_lander(S, 0, 60, 28);
+    sim_run_frame(S);                                     // first hit
+    SIM_CHECK(lives() == 2);
+    SIM_CHECK(respawn_invuln() == 90);
+    // Hold the lander in place; run 30 more frames covering the entire
+    // explosion phase (frames 90..61). No further hits expected.
+    for (int i = 0; i < 30; i++) sim_run_frame(S);
+    SIM_CHECK_MSG(lives() == 2,
+                  "lives after 30 invuln frames = %d (want still 2)",
+                  lives());
+    // Continue through the blink phase (60..1). Still no hits.
+    for (int i = 0; i < 60; i++) sim_run_frame(S);
+    SIM_CHECK_MSG(lives() == 2,
+                  "lives after 90 invuln frames = %d (want still 2)",
+                  lives());
 }
 
 static void test_game_over_freezes_lives(void) {
@@ -248,6 +315,9 @@ int main(int argc, char **argv) {
 
     test_initial_lives();
     test_collision_decrements_lives();
+    test_collision_arms_respawn_invuln();
+    test_respawn_invuln_decrements_per_frame();
+    test_respawn_invuln_blocks_re_collision();
     test_three_hits_to_game_over();
     test_game_over_freezes_lives();
 

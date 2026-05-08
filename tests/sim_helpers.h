@@ -36,6 +36,8 @@ typedef struct {
     uint16_t sym_skip_title_flag;
     uint16_t sym_lives;
     uint16_t sym_game_state;
+    uint16_t sym_respawn_invuln;
+    uint16_t sym_death_y;
     uint16_t sym_projectiles;
     uint16_t sym_entities;
     uint16_t sym_framebuffer;
