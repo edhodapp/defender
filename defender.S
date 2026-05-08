@@ -1893,6 +1893,11 @@ ship_collision_check:
     ; Skip while the ship is dying or respawning. death_flash is the short
     ; screen-flash window; respawn_invuln is the longer explosion + blink
     ; window. Either being non-zero means the ship is non-collidable.
+    ; Invariant: at arming time (sc_check on hit), death_flash <= respawn_invuln
+    ; — both are armed atomically with 8 vs 90, so respawn_invuln strictly
+    ; outlives death_flash. The OR here is defensive; if anyone bumps
+    ; death_flash above 90 or shrinks respawn_invuln, the longer-of-the-two
+    ; is what gates collision regardless.
     lds   r24, death_flash
     cpi   r24, 0
     brne  sc_skip
@@ -2017,7 +2022,8 @@ ifd_done:
 ; fragment is a single pixel; per-frame extent = (90 - respawn_invuln + 1)
 ; pixels along its (dx, dy) direction. Off-screen fragments are skipped.
 ;
-; Clobbers: r0, r1, r16, r17, r18, r19, r20, r21, r24, r25, r26, r27, X, Y, Z.
+; Clobbers: r0, r1, r16, r17, r18, r19, r20, r21, r24, r25, r26, r30, r31.
+; (Y left intact; X is touched only inside setpixel.)
 ; ============================================================================
 render_explosion:
     lds   r18, respawn_invuln
@@ -2080,7 +2086,8 @@ rex_skip:
 ; ============================================================================
 ; setpixel: OR a single pixel into the framebuffer at (x=r24, y=r25).
 ; Caller must range-check (x < 128, y < 64). Used by render_explosion.
-; Clobbers: r0, r1, r26, r27, r30, r31.
+; Clobbers: r0, r1, r24, r26, r27, r30, r31. r24 is destroyed by the
+; load-OR-store at the end (overwriting the input x).
 ; ============================================================================
 setpixel:
     ; offset = (y >> 3) * 128 + x
