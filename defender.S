@@ -108,6 +108,12 @@ high_scores:    .skip 9
 .global game_state
 game_state:     .skip 1
 
+; 8-bit Galois LFSR state for in-game randomness (Swarmer turn
+; decisions, future jitter sources). Seeded non-zero in _reset so the
+; sequence has period 255; never let it reach 0 or it gets stuck.
+.global rng_state
+rng_state:      .skip 1
+
 ; Boot-warp grace period: the boot Lander placed at _reset doesn't run
 ; its AI for the first N frames after main_loop starts, so the player
 ; has a moment to see "there's a Lander up there at y=10" before it
@@ -286,6 +292,12 @@ _reset:
     ; orient before AI seek begins).
     ldi   r24, 30
     sts   boot_warp_frames, r24
+
+    ; Seed the LFSR. Any non-zero value works; 0x4C was picked because
+    ; it produces a non-degenerate first ~10 outputs and is easy to
+    ; spot in a hex dump.
+    ldi   r24, 0x4C
+    sts   rng_state, r24
 
     ; Wave 1 setup: 1 boot Lander already alive; the rest derive from
     ; wave_sizes_table[difficulty][0]. Default difficulty = MED.
@@ -1937,10 +1949,13 @@ spawn_swarmers:
     push  r2
     push  r3
     push  r4
+    push  r5
     mov   r2, r24                        ; cache base_x
     mov   r3, r25                        ; cache base_y (already 6-bit clean)
     ldi   r24, POD_SWARMER_COUNT
     mov   r4, r24                        ; remaining swarmers to install
+    rcall rng_step                       ; one rng draw per Pod death
+    mov   r5, r24                        ; r5 = dir-rotation base (0..255 → mod 8)
     ldi   r26, lo8(entities)
     ldi   r27, hi8(entities)
     ldi   r19, ENTITY_SLOTS
@@ -1953,28 +1968,51 @@ ss_find_loop:
     brne  ss_find_loop
     rjmp  ss_done                        ; out of free slots — spawn fewer
 ss_install:
-    ; offset_index = POD_SWARMER_COUNT - r4 (0 for the first install,
-    ; 4 for the last). Each entry is 2 bytes (dx, dy).
+    ; spawn_idx = POD_SWARMER_COUNT - r4  (0 for first install, 4 for last)
     ldi   r20, POD_SWARMER_COUNT
     sub   r20, r4
-    lsl   r20                            ; *2
+    push  r20                            ; stash spawn_idx; dir lookup needs it too
+
+    ; --- Position offset (2 bytes per entry, dx then dy) ---
+    mov   r24, r20
+    lsl   r24                            ; *2
     ldi   r30, lo8(swarmer_spawn_offsets)
     ldi   r31, hi8(swarmer_spawn_offsets)
+    add   r30, r24
+    ldi   r24, 0
+    adc   r31, r24
+    lpm   r24, Z+                        ; r24 = signed dx (offset)
+    lpm   r25, Z                         ; r25 = signed dy (offset)
+    push  r25
+    mov   r17, r24                       ; r17 = position dx (preserve over Z reuse)
+    pop   r18                            ; r18 = position dy
+
+    ; --- Initial direction = (initial_dir_offsets[idx] + r5) mod 8 ---
+    pop   r20                            ; restore spawn_idx
+    ldi   r30, lo8(swarmer_initial_dir_offsets)
+    ldi   r31, hi8(swarmer_initial_dir_offsets)
     add   r30, r20
-    ldi   r20, 0
-    adc   r31, r20
-    lpm   r20, Z+                        ; r20 = signed dx
-    lpm   r21, Z                         ; r21 = signed dy
+    ldi   r24, 0
+    adc   r31, r24
+    lpm   r20, Z                         ; r20 = base offset (0/2/4/6/3)
+    add   r20, r5                        ; + per-Pod random rotation
+    andi  r20, 0x07                      ; mod 8 → 3-bit dir
+
+    ; --- Compute final position ---
     mov   r24, r2
-    add   r24, r20                       ; world_x + dx (mod-256 wrap is fine)
+    add   r24, r17                       ; world_x + dx (mod-256 wrap is fine)
     mov   r25, r3
-    add   r25, r21                       ; y + dy
+    add   r25, r18                       ; y + dy
     andi  r25, 0x3F                      ; clear state2 bits
+
+    ; --- Pack byte 0: active | type=SWARMER | dir ---
+    ldi   r21, (1<<7) | (TYPE_SWARMER<<4)
+    or    r21, r20
+
     ; AVR limitation: X (r26:r27) doesn't support std with displacement.
     ; st X+ x 3 walks bytes 0/1/2 and advances X to the next slot,
     ; replacing the explicit adiw the find-loop would otherwise need.
-    ldi   r20, (1<<7) | (TYPE_SWARMER<<4)
-    st    X+, r20
+    st    X+, r21
     st    X+, r24
     st    X+, r25
     lds   r20, enemies_alive
@@ -1985,6 +2023,7 @@ ss_install:
     dec   r4
     brne  ss_find_loop                   ; still want more swarmers
 ss_done:
+    pop   r5
     pop   r4
     pop   r3
     pop   r2
@@ -1999,6 +2038,31 @@ swarmer_spawn_offsets:
     .byte  4, -2      ; NE
     .byte -4,  2      ; SW
     .byte  4,  2      ; SE
+    .balign 2
+
+; Initial direction OFFSETS (3-bit compass dirs) assigned to the 5
+; Swarmers when spawning. The actual direction stored in each Swarmer's
+; state field is (offsets[i] + rng_base) mod 8, where rng_base comes
+; from a single rng_step call at the top of spawn_swarmers — so each
+; Pod kill spawns 5 Swarmers facing 5 distinct compass directions, but
+; the absolute direction varies between kills. This is the "RNG-shuffled
+; across 8 compass dirs" star-burst Ed asked for.
+swarmer_initial_dir_offsets:
+    .byte 0, 2, 4, 6, 3
+    .balign 2
+
+; 8-direction velocity tables for Swarmers. Indexed by 3-bit compass
+; direction stored in byte 0 bits 0-2:
+;   0 = E,  1 = SE, 2 = S,  3 = SW
+;   4 = W,  5 = NW, 6 = N,  7 = NE
+; Each Swarmer translates by (dx, dy) every frame, giving 1 px/frame
+; cardinal speed and ~1.4 px/frame diagonal. update_swarmer rotates
+; the direction by ±1 step toward the player every 8 frames (75% of
+; the time) — that gives jittery movement with inertia.
+swarmer_dx_table:
+    .byte  1,  1,  0, -1, -1, -1,  0,  1
+swarmer_dy_table:
+    .byte  0,  1,  1,  1,  0, -1, -1, -1
     .balign 2
 chh_dec_enemy:
     lds   r25, enemies_alive
@@ -2078,6 +2142,25 @@ lbi_low:
 lbi_med:
     ldi   r24, lo8(6000)
     ldi   r25, hi8(6000)
+    ret
+
+; ============================================================================
+; rng_step: 8-bit Galois LFSR step. Returns r24 = next pseudo-random
+; byte, also stored in rng_state. Polynomial 0xB8 → period 255 (every
+; non-zero state is visited exactly once before the sequence repeats).
+; Cheap (4 instructions on the hot path) so update_swarmer can call it
+; on every decision frame for every Swarmer.
+; Clobbers: r24, r25.
+; ============================================================================
+.global rng_step
+rng_step:
+    lds   r24, rng_state
+    lsr   r24
+    brcc  rs_no_xor                       ; old bit 0 was 0 → just shift
+    ldi   r25, 0xB8
+    eor   r24, r25
+rs_no_xor:
+    sts   rng_state, r24
     ret
 
 ; ============================================================================
@@ -2487,47 +2570,143 @@ upod_left:
 upod_done:
     ret
 
-; Swarmer update — fast chase, 2× Mutant speed. 1 row / frame vertical
-; toward sprite_y; 1 column / 2 frames horizontal toward the ship's
-; world_x. Spawned 5-at-a-time from a killed Pod.
+; Swarmer update — direction-based motion with periodic player-biased
+; nudging. Persistent direction (3 bits in byte 0) gives inertia: most
+; frames the Swarmer just translates by 1 px in its current heading.
+; Every 8 frames, an LFSR coin flip decides whether to keep course
+; (25%) or rotate ±1 step toward the player's compass bearing (75%).
+; The bias drives eventual convergence; the inertia prevents the
+; "teleport every frame" feel of pure RNG. Initial directions are set
+; in spawn_swarmers from a randomized base so each Pod kill produces a
+; unique 5-direction starburst.
+;
 ; Y points at the slot's byte 0 on entry; preserved on return.
 update_swarmer:
-    ; Vertical (1 row / frame).
-    ldd   r25, Y+2
-    mov   r24, r25
-    andi  r24, 0xC0                      ; preserve state2
-    andi  r25, 0x3F                      ; swarmer_y
-    lds   r26, sprite_y
-    cp    r25, r26
-    breq  usw_skip_v
-    brlo  usw_v_down
-    dec   r25
-    rjmp  usw_v_store
-usw_v_down:
-    inc   r25
-usw_v_store:
-    or    r25, r24
-    std   Y+2, r25
-usw_skip_v:
-    ; Horizontal (1 col / 2 frames).
+    ; --- Apply velocity for this frame ---
+    ld    r24, Y
+    mov   r25, r24
+    andi  r25, 0x07                      ; r25 = current dir (0..7)
+
+    ldi   r30, lo8(swarmer_dx_table)
+    ldi   r31, hi8(swarmer_dx_table)
+    add   r30, r25
+    ldi   r24, 0
+    adc   r31, r24
+    lpm   r17, Z                         ; r17 = signed dx
+
+    ldi   r30, lo8(swarmer_dy_table)
+    ldi   r31, hi8(swarmer_dy_table)
+    add   r30, r25
+    adc   r31, r24                       ; r24 still 0
+    lpm   r19, Z                         ; r19 = signed dy
+                                          ; (using r19 not r18 because
+                                          ;  r18 is update_entities's
+                                          ;  outer loop counter and must
+                                          ;  survive this updater)
+
+    ldd   r24, Y+1                       ; world_x
+    add   r24, r17
+    std   Y+1, r24
+
+    ldd   r24, Y+2                       ; state2 | y
+    mov   r25, r24
+    andi  r25, 0xC0                      ; preserve state2
+    andi  r24, 0x3F                      ; isolate y
+    add   r24, r19
+    andi  r24, 0x3F                      ; wrap into 6-bit field
+    or    r24, r25
+    std   Y+2, r24
+
+    ; --- Decision frame? Only every 8 frames per Swarmer ---
     lds   r25, frame_counter
-    andi  r25, 0x01
-    brne  usw_done
-    ldd   r24, Y+1
-    lds   r25, scroll_offset
-    subi  r25, -60
-    cp    r24, r25
-    breq  usw_done
-    sub   r25, r24
-    sbrc  r25, 7
-    rjmp  usw_h_left
-    inc   r24
-    std   Y+1, r24
-    rjmp  usw_done
-usw_h_left:
-    dec   r24
-    std   Y+1, r24
+    andi  r25, 0x07
+    breq  usw_decision
+    ret
+
+usw_decision:
+    rcall rng_step                       ; r24 = random byte
+    andi  r24, 0x03
+    breq  usw_done                       ; (rand & 3) == 0 → 25% keep
+
+    ; 75% chance: nudge dir 1 step toward the ideal player bearing.
+    rcall swarmer_ideal_dir              ; r24 = ideal dir (0..7)
+    ld    r25, Y
+    mov   r17, r25
+    andi  r17, 0x07                      ; r17 = current dir
+    sub   r24, r17                       ; r24 = ideal - current
+    andi  r24, 0x07                      ; mod 8
+    breq  usw_done                       ; already aligned
+    cpi   r24, 5
+    brsh  usw_rotate_minus
+    inc   r17                            ; rotate +1 (shorter way)
+    rjmp  usw_store_dir
+usw_rotate_minus:
+    dec   r17                            ; rotate -1
+usw_store_dir:
+    andi  r17, 0x07                      ; mod 8
+    andi  r25, 0xF8                      ; clear old dir bits
+    or    r25, r17
+    st    Y, r25
 usw_done:
+    ret
+
+; swarmer_ideal_dir: returns r24 = compass dir (0..7) the Swarmer at Y
+; would face if heading directly at the ship. Wrap-aware on x (the
+; signed sub gives the shorter direction); not wrapped on y. Y is
+; preserved; clobbers r17, r24, r25.
+swarmer_ideal_dir:
+    ldd   r24, Y+1                       ; swarmer world_x
+    lds   r25, scroll_offset
+    subi  r25, -60                       ; ship's world_x
+    sub   r25, r24                       ; r25 = signed dx (wrap-aware)
+
+    ldd   r24, Y+2
+    andi  r24, 0x3F                      ; swarmer y
+    lds   r17, sprite_y
+    sub   r17, r24                       ; r17 = signed dy
+
+    cpi   r25, 0
+    breq  sid_dx_zero
+    sbrc  r25, 7
+    rjmp  sid_dx_neg
+    ; dx > 0 (player to the right)
+    cpi   r17, 0
+    breq  sid_e
+    sbrc  r17, 7
+    rjmp  sid_ne
+    ldi   r24, 1                         ; SE
+    ret
+sid_e:
+    ldi   r24, 0                         ; E
+    ret
+sid_ne:
+    ldi   r24, 7                         ; NE
+    ret
+sid_dx_neg:
+    cpi   r17, 0
+    breq  sid_w
+    sbrc  r17, 7
+    rjmp  sid_nw
+    ldi   r24, 3                         ; SW
+    ret
+sid_w:
+    ldi   r24, 4                         ; W
+    ret
+sid_nw:
+    ldi   r24, 5                         ; NW
+    ret
+sid_dx_zero:
+    cpi   r17, 0
+    breq  sid_aligned
+    sbrc  r17, 7
+    rjmp  sid_n
+    ldi   r24, 2                         ; S
+    ret
+sid_n:
+    ldi   r24, 6                         ; N
+    ret
+sid_aligned:
+    ldi   r24, 0                         ; nudge will skip (no rotation needed)
     ret
 
 ; Lander update — descend to humanoid altitude, hover on its head, pause,
