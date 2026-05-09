@@ -108,6 +108,25 @@ high_scores:    .skip 9
 .global game_state
 game_state:     .skip 1
 
+; Test-only disable for the planet-destruction watcher. Production
+; code keeps it 0; the unit-test harness sets it to 1 in
+; sim_clear_state_minimal so the per-event check is a no-op when the
+; test world has no humanoids. Without this, every test that places
+; an entity without populating slots 1..8 would trip planet
+; destruction and turn its placed Landers into Mutants.
+.global planet_check_disabled
+planet_check_disabled: .skip 1
+
+; All-Mutant mode flag. 0 = normal (Landers / Pods can spawn,
+; humanoids exist on the ground); 1 = planet destroyed (every Lander
+; in flight turned Mutant, spawner installs Mutants only). Set when
+; the last humanoid is consumed (shot, carried to the top, or fell
+; off-screen); cleared at wave-end when a fresh batch of humanoids is
+; respawned. Drives the Williams "all-Mutant skies" feel after the
+; planet falls.
+.global planet_destroyed
+planet_destroyed: .skip 1
+
 ; 8-bit Galois LFSR state for in-game randomness (Swarmer turn
 ; decisions, future jitter sources). Seeded non-zero in _reset so the
 ; sequence has period 255; never let it reach 0 or it gets stuck.
@@ -641,6 +660,13 @@ wave_at_max:
     ; Per-wave Pod allotment.
     rcall lookup_pod_count
     sts   wave_pods_to_spawn, r24
+    ; New planet — clear the destroyed flag and respawn humanoids.
+    ; If the previous wave never tripped destruction, this is just an
+    ; idempotent overwrite (8 humanoids in slots 1..8 already exist;
+    ; they get rewritten with the same values). Cheap.
+    clr   r24
+    sts   planet_destroyed, r24
+    rcall respawn_humanoids
     ldi   r24, 6                         ; SFX_WAVE_CHANGE
     call  audio_play
     ; Kick the new wave: spawn one immediately so the player sees a fresh
@@ -1695,10 +1721,116 @@ lpc_clamped:
     lpm   r24, Z
     ret
 
+; ============================================================================
+; check_planet_destruction: scan entity slots once per frame; if no
+; humanoids remain (active humanoid entities + carrying Landers all 0)
+; and the planet wasn't already destroyed, set planet_destroyed and
+; instantly transform every empty (non-carrying) Lander on screen into
+; a Mutant. The all-Mutant spawner mode then takes over for the rest
+; of the wave; wave_at_max re-spawns humanoids and clears the flag at
+; wave end.
+; Clobbers: r17, r18, r19, r24, r25, X (via transform_landers_to_mutants),
+;           Y if transform fires.
+; ============================================================================
+check_planet_destruction:
+    lds   r24, planet_check_disabled
+    cpi   r24, 0
+    brne  cpd_done                         ; test-mode opt-out
+    lds   r24, planet_destroyed
+    cpi   r24, 0
+    brne  cpd_done                         ; already in all-Mutant mode
+    ldi   r28, lo8(entities)
+    ldi   r29, hi8(entities)
+    ldi   r18, ENTITY_SLOTS
+    clr   r19                              ; r19 = humanoid count
+cpd_loop:
+    ld    r24, Y
+    sbrs  r24, 7
+    rjmp  cpd_next
+    mov   r25, r24
+    swap  r25
+    andi  r25, 0x07                        ; r25 = type
+    cpi   r25, TYPE_HUMANOID
+    breq  cpd_inc                          ; humanoid (grounded or falling)
+    cpi   r25, TYPE_LANDER
+    brne  cpd_next
+    sbrs  r24, 0                           ; bit 0 = carrying
+    rjmp  cpd_next
+cpd_inc:
+    inc   r19
+cpd_next:
+    adiw  r28, ENTITY_SIZE
+    dec   r18
+    brne  cpd_loop
+    cpi   r19, 0
+    brne  cpd_done                         ; humanoids remain
+    ldi   r24, 1
+    sts   planet_destroyed, r24
+    rcall transform_landers_to_mutants
+    ; Audible cue — the SFX_DEATH swoop doubles as a planet-destruction
+    ; sound (descending pitch, dramatic). Keeps the audio table small
+    ; while still signalling the transition.
+    ldi   r24, 3                           ; SFX_DEATH
+    sts   pending_sfx, r24
+cpd_done:
+    ret
+
+; transform_landers_to_mutants: iterate slots, in-place change every
+; non-carrying Lander to a Mutant (TYPE_MUTANT, state cleared, position
+; preserved). Carrying Landers are left alone so they can finish their
+; abduction trip and become Mutants via the existing y==9 ul_become_mutant
+; path; that path also dispatches when planet_destroyed is set.
+; Clobbers: r18, r24, r25, Y.
+transform_landers_to_mutants:
+    ldi   r28, lo8(entities)
+    ldi   r29, hi8(entities)
+    ldi   r18, ENTITY_SLOTS
+ttm_loop:
+    ld    r24, Y
+    sbrs  r24, 7
+    rjmp  ttm_next
+    mov   r25, r24
+    swap  r25
+    andi  r25, 0x07
+    cpi   r25, TYPE_LANDER
+    brne  ttm_next
+    sbrc  r24, 0                           ; carrying → leave alone
+    rjmp  ttm_next
+    andi  r24, 0x80                        ; clear type/state, keep active bit
+    ori   r24, (TYPE_MUTANT << 4)
+    st    Y, r24
+ttm_next:
+    adiw  r28, ENTITY_SIZE
+    dec   r18
+    brne  ttm_loop
+    ret
+
+; respawn_humanoids: install 8 humanoids in slots 1..8 at the same
+; world_x positions used at boot (16, 48, 80, ..., 240). Called from
+; _reset and from wave_at_max when the previous wave saw a planet
+; destruction (so the next wave starts with a fresh, populated planet).
+; Clobbers: r24, r25, r26, Y.
+respawn_humanoids:
+    ldi   r28, lo8(entities + 1*ENTITY_SIZE)
+    ldi   r29, hi8(entities + 1*ENTITY_SIZE)
+    ldi   r25, 16                          ; world_x seed
+    ldi   r24, 8                           ; count
+rh_loop:
+    ldi   r26, (1<<7) | (TYPE_HUMANOID<<4)
+    st    Y+, r26
+    st    Y+, r25                          ; world_x
+    ldi   r26, 48                          ; y (page 6, just above mountains)
+    st    Y+, r26
+    subi  r25, -32                         ; world_x += 32
+    dec   r24
+    brne  rh_loop
+    ret
+
 ; try_spawn_enemy: at every periodic-spawn tick (and at every wave-end
 ; kick), try to install one new attacker. Picks Pod first if any pods
-; remain in the per-wave allotment; otherwise installs a Lander. Both
-; share spawn position scheduling (spawn_pos_idx) and the
+; remain in the per-wave allotment; otherwise installs a Lander. While
+; planet_destroyed is set, every spawn comes out as a Mutant instead.
+; All paths share spawn position scheduling (spawn_pos_idx) and the
 ; wave_to_spawn/enemies_alive bookkeeping.
 try_spawn_enemy:
     ; Wave gate: skip if the wave has no more attackers to spawn.
@@ -1726,8 +1858,15 @@ tsl_have_slot:
     lsl   r25
     lsl   r25                            ; r25 = idx * 32 (mod 256)
     subi  r25, -16                       ; +16
-    ; Choose enemy type: Pod first (if any in the wave allotment),
-    ; else Lander.
+    ; Type choice. Planet-destroyed mode overrides everything: post-
+    ; planet-loss waves are all-Mutant per Williams. Otherwise spawn
+    ; a Pod first (if the per-wave allotment has any), else a Lander.
+    lds   r24, planet_destroyed
+    cpi   r24, 0
+    breq  tse_normal_choice
+    ldi   r24, (1<<7) | (TYPE_MUTANT<<4)
+    rjmp  tse_install
+tse_normal_choice:
     lds   r24, wave_pods_to_spawn
     cpi   r24, 0
     breq  tse_install_lander
@@ -1892,9 +2031,12 @@ cc_handle_hit:
     st    Y, r25
     rjmp  chh_dec_enemy                  ; lander died — decrement count
 chh_drop_cargo:
-    ; Clear carry bit; lander stays active. Enemy count unchanged.
+    ; Clear carry bit; lander stays active. Enemy count unchanged,
+    ; but the carried humanoid was just consumed, so the planet
+    ; may have fallen.
     andi  r25, 0xFE
     st    Y, r25
+    rcall check_planet_destruction
     ret
 chh_kill:
     ; Pre-clear: capture original type so we know whether to decrement,
@@ -1917,9 +2059,14 @@ chk_not_pod:
     breq  chk_dec
     cpi   r27, TYPE_SWARMER
     breq  chk_dec
-    ret                                  ; humanoid kill — no count change
+    ; Humanoid kill path (or unknown type) — no enemy-count change,
+    ; but a humanoid was just removed so the planet may have fallen.
+    rjmp  chk_planet_check
 chk_dec:
     rjmp  chh_dec_enemy
+chk_planet_check:
+    rcall check_planet_destruction
+    ret
 
 chh_pod:
     ; Capture pod position before clearing the slot, then deactivate
@@ -2856,11 +3003,14 @@ ul_done:
 ; ul_become_mutant: in-place type change LANDER → MUTANT.
 ; Preserves the active bit and overwrites everything else (carry, pause).
 ; world_x and y are inherited so the Mutant pops in where the Lander was.
+; A carrying Lander reaching the top consumes the humanoid it was
+; carrying, so we run the planet-destruction check after the type swap.
 ul_become_mutant:
     ld    r25, Y
     andi  r25, 0x80
     ori   r25, (TYPE_MUTANT << 4)
     st    Y, r25
+    rcall check_planet_destruction
     ret
 
 ; ul_humanoid_aligned: returns r24 = 1 if any active humanoid is within ±7

@@ -39,6 +39,8 @@ typedef struct {
     uint16_t sym_respawn_invuln;
     uint16_t sym_death_y;
     uint16_t sym_boot_warp_frames;
+    uint16_t sym_planet_destroyed;
+    uint16_t sym_planet_check_disabled;
     uint16_t sym_projectiles;
     uint16_t sym_entities;
     uint16_t sym_framebuffer;

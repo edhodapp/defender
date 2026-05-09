@@ -95,6 +95,8 @@ sim_t *sim_boot_no_warmup(const char *elf_path) {
     s->sym_respawn_invuln = sim_lookup(s, "respawn_invuln");
     s->sym_death_y        = sim_lookup(s, "death_y");
     s->sym_boot_warp_frames = sim_lookup(s, "boot_warp_frames");
+    s->sym_planet_destroyed = sim_lookup(s, "planet_destroyed");
+    s->sym_planet_check_disabled = sim_lookup(s, "planet_check_disabled");
     s->sym_projectiles    = sim_lookup(s, "projectiles");
     s->sym_entities       = sim_lookup(s, "entities");
     s->sym_framebuffer    = sim_lookup(s, "framebuffer");
@@ -195,6 +197,15 @@ void sim_clear_projectiles(sim_t *s) {
 void sim_clear_state_minimal(sim_t *s) {
     sim_clear_entities(s);
     sim_clear_projectiles(s);
+    // Disable the planet-destruction watcher for the test harness;
+    // every humanoid-removal site (chh_kill, chh_drop_cargo,
+    // ul_become_mutant) calls check_planet_destruction in production,
+    // and tripping it would transform all empty Landers in the test
+    // world into Mutants and switch the spawner to all-Mutant mode.
+    // Tests that specifically exercise planet destruction can clear
+    // this flag back to 0.
+    sim_mem_w(s, s->sym_planet_destroyed, 0);
+    sim_mem_w(s, s->sym_planet_check_disabled, 1);
     sim_mem_w(s, s->sym_frame_counter, 0);
     sim_mem_w(s, s->sym_death_flash, 0);
     sim_mem_w(s, s->sym_spawn_pos_idx, 0);
