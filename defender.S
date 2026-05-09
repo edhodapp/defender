@@ -2051,6 +2051,16 @@ swarmer_initial_dir_offsets:
     .byte 0, 2, 4, 6, 3
     .balign 2
 
+; Per-difficulty Swarmer nudge "skip threshold" — how often Swarmers
+; ignore their decision frame and keep current heading instead of
+; rotating toward the player. See lookup_swarm_skip_thresh for what
+; the values map to.
+swarm_skip_thresh_table:
+    .byte 2      ; LOW  → 25% nudge (drunker Swarmers, not really hunting)
+    .byte 1      ; MED  → 50% nudge
+    .byte 0      ; HIGH → 75% nudge (Williams-faithful)
+    .balign 2
+
 ; 8-direction velocity tables for Swarmers. Indexed by 3-bit compass
 ; direction stored in byte 0 bits 0-2:
 ;   0 = E,  1 = SE, 2 = S,  3 = SW
@@ -2142,6 +2152,33 @@ lbi_low:
 lbi_med:
     ldi   r24, lo8(6000)
     ldi   r25, hi8(6000)
+    ret
+
+; ============================================================================
+; lookup_swarm_skip_thresh: returns r24 = the "skip threshold" for the
+; current difficulty. Each Swarmer's decision frame draws a random byte;
+; (rand & 3) is in 0..3. We skip the nudge (keep current direction) if
+; that value <= threshold; nudge otherwise. So:
+;   thresh 0 → skip 1 of 4 → 75% nudge → HIGH (Williams-faithful)
+;   thresh 1 → skip 2 of 4 → 50% nudge → MED
+;   thresh 2 → skip 3 of 4 → 25% nudge → LOW (Swarmers wander, mostly)
+; Effect: lower difficulties produce drunker Swarmers that don't track
+; the player as tightly. Player still has to dodge but isn't being
+; hunted.
+; Clobbers: r24, r25, Z.
+; ============================================================================
+lookup_swarm_skip_thresh:
+    lds   r24, difficulty
+    cpi   r24, 3
+    brlo  lst_in_range
+    ldi   r24, 0                          ; unknown difficulty → HIGH default
+lst_in_range:
+    ldi   r30, lo8(swarm_skip_thresh_table)
+    ldi   r31, hi8(swarm_skip_thresh_table)
+    add   r30, r24
+    ldi   r24, 0
+    adc   r31, r24
+    lpm   r24, Z
     ret
 
 ; ============================================================================
@@ -2625,10 +2662,17 @@ update_swarmer:
 
 usw_decision:
     rcall rng_step                       ; r24 = random byte
-    andi  r24, 0x03
-    breq  usw_done                       ; (rand & 3) == 0 → 25% keep
+    andi  r24, 0x03                      ; rand_2bits in 0..3
+    push  r24                            ; stash for compare after lookup
+    rcall lookup_swarm_skip_thresh       ; r24 = thresh (0/1/2 for HIGH/MED/LOW)
+    mov   r25, r24
+    pop   r24                            ; rand_2bits back in r24
+    cp    r25, r24                       ; flags = thresh - rand
+    brsh  usw_done                       ; rand <= thresh → keep current dir
+                                          ; (HIGH: skip 1/4, MED: skip 2/4,
+                                          ;  LOW:  skip 3/4)
 
-    ; 75% chance: nudge dir 1 step toward the ideal player bearing.
+    ; rand > thresh → nudge dir 1 step toward the ideal player bearing.
     rcall swarmer_ideal_dir              ; r24 = ideal dir (0..7)
     ld    r25, Y
     mov   r17, r25
