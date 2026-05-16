@@ -110,6 +110,16 @@ physics: $(BUILD)/critter_physics
 	@$(MAKE) -C .. all >/dev/null
 	$(BUILD)/critter_physics ../build/defender.elf
 
+$(BUILD)/profile_gameplay: profile_gameplay.c sim_helpers.c sim_helpers.h | $(BUILD)
+	$(CC) $(CFLAGS) profile_gameplay.c sim_helpers.c $(LDFLAGS) $(LIBS) -o $@
+
+# Full-gameplay simulation under a programmatic "test pilot" — prints
+# a per-50-frame snapshot of (lives, score, enemy count) plus a
+# summary row per (pilot × difficulty). Runs the matrix in one go.
+gameplay: $(BUILD)/profile_gameplay
+	@$(MAKE) -C .. all >/dev/null
+	$(BUILD)/profile_gameplay ../build/defender.elf
+
 $(BUILD)/screenshot: screenshot.c sim_helpers.c sim_helpers.h ssd1306.c ssd1306.h | $(BUILD)
 	$(CC) $(CFLAGS) screenshot.c sim_helpers.c ssd1306.c $(LDFLAGS) $(LIBS) -o $@
 
