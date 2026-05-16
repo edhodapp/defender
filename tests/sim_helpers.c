@@ -97,6 +97,7 @@ sim_t *sim_boot_no_warmup(const char *elf_path) {
     s->sym_boot_warp_frames = sim_lookup(s, "boot_warp_frames");
     s->sym_planet_destroyed = sim_lookup(s, "planet_destroyed");
     s->sym_planet_check_disabled = sim_lookup(s, "planet_check_disabled");
+    s->sym_rng_state             = sim_lookup(s, "rng_state");
     s->sym_projectiles    = sim_lookup(s, "projectiles");
     s->sym_entities       = sim_lookup(s, "entities");
     s->sym_framebuffer    = sim_lookup(s, "framebuffer");

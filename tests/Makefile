@@ -100,6 +100,16 @@ profile: $(BUILD)/profile
 	@echo
 	./profile_report.py ../build/defender.elf
 
+$(BUILD)/critter_physics: critter_physics.c sim_helpers.c sim_helpers.h | $(BUILD)
+	$(CC) $(CFLAGS) critter_physics.c sim_helpers.c $(LDFLAGS) $(LIBS) -o $@
+
+# Per-critter motion characterization. Not a pass/fail test — prints
+# trajectories + summary metrics to stdout so we can see what each
+# enemy actually does and tune accordingly.
+physics: $(BUILD)/critter_physics
+	@$(MAKE) -C .. all >/dev/null
+	$(BUILD)/critter_physics ../build/defender.elf
+
 $(BUILD)/screenshot: screenshot.c sim_helpers.c sim_helpers.h ssd1306.c ssd1306.h | $(BUILD)
 	$(CC) $(CFLAGS) screenshot.c sim_helpers.c ssd1306.c $(LDFLAGS) $(LIBS) -o $@
 
