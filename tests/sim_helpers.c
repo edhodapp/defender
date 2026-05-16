@@ -98,6 +98,7 @@ sim_t *sim_boot_no_warmup(const char *elf_path) {
     s->sym_planet_destroyed = sim_lookup(s, "planet_destroyed");
     s->sym_planet_check_disabled = sim_lookup(s, "planet_check_disabled");
     s->sym_rng_state             = sim_lookup(s, "rng_state");
+    s->sym_spawn_countdown       = sim_lookup(s, "spawn_countdown");
     s->sym_projectiles    = sim_lookup(s, "projectiles");
     s->sym_entities       = sim_lookup(s, "entities");
     s->sym_framebuffer    = sim_lookup(s, "framebuffer");
@@ -207,6 +208,10 @@ void sim_clear_state_minimal(sim_t *s) {
     // this flag back to 0.
     sim_mem_w(s, s->sym_planet_destroyed, 0);
     sim_mem_w(s, s->sym_planet_check_disabled, 1);
+    // Park spawn_countdown high so the periodic spawner doesn't fire
+    // during short test runs. Tests that exercise the spawner
+    // explicitly poke this to 0 (or 1) right before sim_run_frame.
+    sim_mem_w(s, s->sym_spawn_countdown, 255);
     sim_mem_w(s, s->sym_frame_counter, 0);
     sim_mem_w(s, s->sym_death_flash, 0);
     sim_mem_w(s, s->sym_spawn_pos_idx, 0);

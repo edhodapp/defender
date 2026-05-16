@@ -82,6 +82,13 @@ static void clear_state(void) {
     mem_w(a_frame_counter, 0);
     mem_w(a_spawn_pos_idx, 0);
     mem_w(a_death_flash, 0);
+    // Park spawn_countdown high so the periodic spawner doesn't fire
+    // during a 16-frame scenario. Without this, accumulated frames
+    // across the sweep-y / sweep-x loops eventually drag the counter
+    // to 0 and a stray Lander spawns mid-scenario, contaminating the
+    // single-Lander collision check.
+    uint16_t sym_spawn_countdown = sym("spawn_countdown");
+    mem_w(sym_spawn_countdown, 255);
 }
 
 static void place_ship(int sprite_y, int scroll, int facing /* 0=right, 1=left */) {

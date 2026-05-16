@@ -108,6 +108,14 @@ high_scores:    .skip 9
 .global game_state
 game_state:     .skip 1
 
+; Periodic-spawn countdown timer. Decrements once per frame; on hit
+; 0, try_spawn_enemy fires and the timer reloads from
+; spawn_interval_table[difficulty]. Replaces the old uniform
+; frame_counter & 0x1F gate so LOW/MED/HIGH can have different
+; cadences without relying on power-of-2 masks.
+.global spawn_countdown
+spawn_countdown: .skip 1
+
 ; Test-only disable for the planet-destruction watcher. Production
 ; code keeps it 0; the unit-test harness sets it to 1 in
 ; sim_clear_state_minimal so the per-event check is a no-op when the
@@ -421,6 +429,12 @@ skip_title_screen:
     rcall lookup_pod_count
     sts   wave_pods_to_spawn, r24
 
+    ; Seed the spawn-cadence countdown so the first enemy doesn't
+    ; arrive immediately — the player has one full interval to settle
+    ; in after the splash dismisses.
+    rcall lookup_spawn_interval
+    sts   spawn_countdown, r24
+
     ; First bonus-ship threshold from the per-difficulty table:
     ; LOW=3000, MED=6000, HIGH=10000 (Williams Defender). Done HERE,
     ; not pre-title, so it picks up the difficulty the player chose
@@ -475,19 +489,21 @@ ri_tick_done:
     sts   boot_warp_frames, r25
 bw_tick_done:
 
-    ; Periodic enemy spawn: once every 32 frames (~533 ms at 60 Hz),
-    ; fires at frame_counter low 5 bits == 0. With wave_to_spawn = 5 to
-    ; 20 enemies, the wave fills in 2.5-10 seconds. The cadence is fast
-    ; enough that the player feels under pressure (matches Williams
-    ; Defender's hot-wave feel) but slow enough that a freed humanoid
-    ; from a downed carrying Lander has time to reach the ground before
-    ; the next Lander would arrive on top of it.
-    ;
-    ; Reload r25 — audio_tick clobbers it.
-    lds   r25, frame_counter
-    andi  r25, 0x1F
-    brne  no_spawn_check
+    ; Periodic enemy spawn — gated by spawn_countdown, which reloads
+    ; from spawn_interval_table[difficulty] after every fire. LOW gets
+    ; 96 frames (~1.6 s) between spawns; HIGH stays at 32 (~0.53 s,
+    ; Williams pace). Decrement-and-fire is a per-difficulty cadence
+    ; with no power-of-2 mask restriction.
+    lds   r25, spawn_countdown
+    cpi   r25, 0
+    breq  sc_fire
+    dec   r25
+    sts   spawn_countdown, r25
+    rjmp  no_spawn_check
+sc_fire:
     rcall try_spawn_enemy
+    rcall lookup_spawn_interval
+    sts   spawn_countdown, r24
 no_spawn_check:
 
     call  input_read                     ; r24 = button bitmask
@@ -2198,6 +2214,20 @@ swarmer_initial_dir_offsets:
     .byte 0, 2, 4, 6, 3
     .balign 2
 
+; Periodic-spawn cadence per difficulty (frames between enemy spawns).
+; LOW gives the player ~1.6 s between threats; HIGH matches the
+; Williams arcade pace. Values are loaded into spawn_countdown via
+; lookup_spawn_interval at game start and after every successful
+; spawn fire. Picked from the first profile_gameplay baseline:
+; PASSIVE-pilot wave 1 was overwhelming a stationary ship in 10.6 s
+; on every difficulty (peak 19 enemies in that window) because the
+; spawn rate was uniform.
+spawn_interval_table:
+    .byte 96      ; LOW  → spawn every 96 frames (~1.6 s)
+    .byte 64      ; MED  → every 64 frames (~1.07 s)
+    .byte 32      ; HIGH → every 32 frames (~0.53 s, Williams pace)
+    .balign 2
+
 ; Per-difficulty Swarmer nudge "skip threshold" — how often Swarmers
 ; ignore their decision frame and keep current heading instead of
 ; rotating toward the player. See lookup_swarm_skip_thresh for what
@@ -2299,6 +2329,26 @@ lbi_low:
 lbi_med:
     ldi   r24, lo8(6000)
     ldi   r25, hi8(6000)
+    ret
+
+; ============================================================================
+; lookup_spawn_interval: returns r24 = frames-between-spawns for the
+; current difficulty (96 / 64 / 32 for LOW/MED/HIGH). Used both at
+; game start (seed spawn_countdown) and on every spawn fire (reload).
+; Clobbers: r24, r25, Z.
+; ============================================================================
+lookup_spawn_interval:
+    lds   r24, difficulty
+    cpi   r24, 3
+    brlo  lsi_in_range
+    ldi   r24, 0                          ; unknown → LOW (most forgiving)
+lsi_in_range:
+    ldi   r30, lo8(spawn_interval_table)
+    ldi   r31, hi8(spawn_interval_table)
+    add   r30, r24
+    ldi   r24, 0
+    adc   r31, r24
+    lpm   r24, Z
     ret
 
 ; ============================================================================

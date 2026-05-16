@@ -69,7 +69,7 @@ static void test_periodic_spawn_updates_counters(void) {
     sim_sync(S);
     sim_mem_w(S, S->sym_wave_to_spawn, 3);
     sim_mem_w(S, S->sym_enemies_alive, 1);
-    sim_mem_w(S, S->sym_frame_counter, 127);
+    sim_mem_w(S, S->sym_spawn_countdown, 0);
     sim_run_frame(S);                            // fc 127→128 → spawn fires
     SIM_CHECK_MSG(wave_to_spawn() == 2,
                   "wave_to_spawn after spawn=%d (want 2)", wave_to_spawn());
@@ -84,7 +84,7 @@ static void test_no_spawn_when_wave_done_spawning(void) {
     sim_clear_state_minimal(S);
     sim_mem_w(S, S->sym_wave_to_spawn, 0);
     sim_mem_w(S, S->sym_enemies_alive, 1);     // keep wave open
-    sim_mem_w(S, S->sym_frame_counter, 127);
+    sim_mem_w(S, S->sym_spawn_countdown, 0);
     sim_run_frame(S);
     SIM_CHECK_MSG(!sim_lander_active(S, 0),
                   "no Lander should have spawned with wave_to_spawn=0");

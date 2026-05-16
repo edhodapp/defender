@@ -240,8 +240,8 @@ static void test_lander_spawn_not_blocked_by_active_sfx(void) {
     sim_sync(S);
     sim_clear_state_minimal(S);
     sim_set_ship(S, 28, 0, 0);
-    // Force the spawn-trigger frame (next iter: fc -> 128 -> spawn fires).
-    sim_mem_w(S, S->sym_frame_counter, 127);
+    // Force the spawn to fire next iteration (countdown=0 → fire path).
+    sim_mem_w(S, S->sym_spawn_countdown, 0);
     // Pretend SFX_FIRE is active; audio_tick will advance it and clobber r25.
     sim_mem_w(S, S->sym_sound_id, 1);
     sim_mem_w(S, S->sym_sound_frame, 0);

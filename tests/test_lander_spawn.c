@@ -1,6 +1,7 @@
-// Functional tests for the periodic Lander-spawn layer (try_spawn_lander).
+// Functional tests for the periodic Lander-spawn layer (try_spawn_enemy).
 // Layer contract:
-//   - Triggered by main_loop when (frame_counter & 0x1F) == 0 AND fc != 0.
+//   - Triggered by main_loop when spawn_countdown decrements to 0
+//     (then reloaded from spawn_interval_table[difficulty]).
 //   - Picks the first inactive entity slot scanning slots 0..63.
 //   - Writes Lander at world_x = (spawn_pos_idx * 32 + 16) mod 256, y = 10.
 //   - Increments spawn_pos_idx after a successful spawn.
@@ -39,7 +40,7 @@ static int find_lander_at(int world_x, int skip_slot) {
 // ---- 1. Spawn fires when frame_counter advances to 128 ----
 static void test_spawn_fires_at_fc128(void) {
     scenario();
-    sim_mem_w(S, S->sym_frame_counter, 127);                // next iter → fc=128
+    sim_mem_w(S, S->sym_spawn_countdown, 0);            // next iter → fire
     sim_run_frame(S);
     SIM_CHECK_MSG(sim_lander_active(S, 0), "no lander spawned at fc=128");
     SIM_CHECK_MSG(sim_lander_world_x(S, 0) == 16,
@@ -51,7 +52,7 @@ static void test_idx_increments(void) {
     scenario();
     SIM_CHECK_MSG(sim_mem_r(S, S->sym_spawn_pos_idx) == 0, "initial idx=%d",
                   sim_mem_r(S, S->sym_spawn_pos_idx));
-    sim_mem_w(S, S->sym_frame_counter, 127);
+    sim_mem_w(S, S->sym_spawn_countdown, 0);
     sim_run_frame(S);
     SIM_CHECK_MSG(sim_mem_r(S, S->sym_spawn_pos_idx) == 1, "after 1 spawn idx=%d",
                   sim_mem_r(S, S->sym_spawn_pos_idx));
@@ -60,9 +61,9 @@ static void test_idx_increments(void) {
 // ---- 3. Two periodic spawns land at world_x=16 and 48 in distinct slots ----
 static void test_two_spawns_distinct_positions(void) {
     scenario();
-    sim_mem_w(S, S->sym_frame_counter, 127);
+    sim_mem_w(S, S->sym_spawn_countdown, 0);
     sim_run_frame(S);                                        // first spawn
-    sim_mem_w(S, S->sym_frame_counter, 127);
+    sim_mem_w(S, S->sym_spawn_countdown, 0);
     sim_run_frame(S);                                        // second spawn
     SIM_CHECK_MSG(count_active_landers() == 2, "got %d landers", count_active_landers());
     SIM_CHECK_MSG(sim_lander_world_x(S, 0) == 16, "slot 0 wx=%d", sim_lander_world_x(S, 0));
@@ -75,7 +76,7 @@ static void test_full_table_no_spawn(void) {
     scenario();
     for (int i = 0; i < 64; i++) sim_place_lander(S, i, 100, 10);
     sim_mem_w(S, S->sym_spawn_pos_idx, 5);
-    sim_mem_w(S, S->sym_frame_counter, 127);
+    sim_mem_w(S, S->sym_spawn_countdown, 0);
     sim_run_frame(S);
     SIM_CHECK_MSG(sim_mem_r(S, S->sym_spawn_pos_idx) == 5,
                   "idx changed to %d", sim_mem_r(S, S->sym_spawn_pos_idx));
@@ -86,7 +87,7 @@ static void test_picks_first_inactive(void) {
     scenario();
     sim_place_lander(S, 0, 100, 10);
     sim_mem_w(S, S->sym_spawn_pos_idx, 0);
-    sim_mem_w(S, S->sym_frame_counter, 127);
+    sim_mem_w(S, S->sym_spawn_countdown, 0);
     sim_run_frame(S);
     SIM_CHECK(sim_lander_active(S, 1));
     SIM_CHECK_MSG(sim_lander_world_x(S, 1) == 16, "got %d", sim_lander_world_x(S, 1));
@@ -99,7 +100,7 @@ static void test_idx_wraps_world_x(void) {
     scenario();
     sim_place_lander(S, 1, 200, 10);
     sim_mem_w(S, S->sym_spawn_pos_idx, 8);
-    sim_mem_w(S, S->sym_frame_counter, 127);
+    sim_mem_w(S, S->sym_spawn_countdown, 0);
     sim_run_frame(S);
     SIM_CHECK(sim_lander_active(S, 0));
     SIM_CHECK_MSG(sim_lander_world_x(S, 0) == 16,
@@ -121,7 +122,7 @@ static void test_overlap_is_accepted_arcade_quirk(void) {
     sim_place_lander(S, 6, 176, 10);
     sim_place_lander(S, 7, 208, 10);
     sim_mem_w(S, S->sym_spawn_pos_idx, 8);                  // overlap-inducing idx
-    sim_mem_w(S, S->sym_frame_counter, 127);
+    sim_mem_w(S, S->sym_spawn_countdown, 0);
     sim_run_frame(S);
     SIM_CHECK_MSG(sim_lander_active(S, 0), "expected new spawn in slot 0");
     int new_x = sim_lander_world_x(S, 0);
