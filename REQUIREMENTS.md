@@ -97,7 +97,7 @@ References:
 | R5.7  | Pause counter hitting 0 fires `ul_do_grab`: clear humanoid's slot, set Lander's carry bit, queue SFX_GRAB. | Williams (grab event) | IMPL | test_abduction.c |
 | R5.8  | Carrying Lander ascends 1 row per drift toward y=9. | Williams (Mutant transformation) | IMPL | test_abduction.c |
 | R5.9  | Carrying Lander reaching y=9 transforms to Mutant in place; humanoid is consumed. | Williams | IMPL | test_mutants.c |
-| R5.10 | Beam hitting an empty Lander → Lander dies, +100 pts. | Williams (150 pts; we use 100 — DEVIATION) | IMPL | test_collision.c |
+| R5.10 | Beam hitting an empty Lander → Lander dies, +100 pts. | Williams (150 pts; we use 100 — DEVIATION) | IMPL | test_collision.c + test_score_events.c |
 | R5.11 | Beam hitting carrying Lander upper half → Lander dies, humanoid becomes falling. | Williams (rescue) | IMPL | test_freeing.c |
 | R5.12 | Beam hitting carrying Lander lower half → humanoid dies, Lander survives empty-handed. | Williams (kill cargo only) | IMPL | test_freeing.c |
 | R5.13 | Landers are lethal on contact with ship. | Williams | IMPL | test_ship_collision.c |
@@ -111,7 +111,7 @@ References:
 | R6.1  | Mutant vertical chase: move 1 row toward ship's `sprite_y` every 2 frames. | Inferred | IMPL | test_mutants.c |
 | R6.2  | Mutant horizontal chase: move 1 col toward ship's world_x every 4 frames (wrap-aware). | Inferred | IMPL | test_mutants.c |
 | R6.3  | Mutants are lethal on contact with ship. | Williams | IMPL | test_mutants.c |
-| R6.4  | Beam hitting a Mutant → Mutant dies, +100 pts. | Williams (150 — DEVIATION) | IMPL | test_collision.c |
+| R6.4  | Beam hitting a Mutant → Mutant dies, +100 pts. | Williams (150 — DEVIATION) | IMPL | test_collision.c + test_score_events.c |
 | R6.5  | Mutants are immune to grab/seek logic (no humanoids to take). | Williams | IMPL | structural |
 
 ---
@@ -158,7 +158,7 @@ References:
 | R10.2  | A grounded humanoid is encoded as `byte0=0xF0`, byte1=world_x, byte2=48. | Inferred | IMPL | structural |
 | R10.3  | A falling humanoid has byte0 bit 0 set; descends 1 row per 4 frames until y=48; on landing, falling bit clears. | Williams (rescue catch) | IMPL | test_humanoids.c |
 | R10.4  | A falling humanoid that reaches y=48 becomes grounded again. | Inferred | IMPL | test_humanoids.c |
-| R10.5  | Beam hitting a humanoid kills it; no score change. | Williams (penalty −100 — DEVIATION, we don't penalize) | PART | test_freeing.c |
+| R10.5  | Beam hitting a humanoid kills it; no score change. | Williams (penalty −100 — DEVIATION, we don't penalize) | PART | test_freeing.c + test_score_events.c |
 | R10.6  | Catching a falling humanoid would award score in Williams (+500). Not implemented (we don't track ship-humanoid contact). | Williams | TODO | — |
 
 ---
@@ -181,12 +181,12 @@ References:
 |--------|-------------|--------|--------|------|
 | R12.1  | `spawn_countdown` decrements once per frame; on 0, fires `try_spawn_enemy` and reloads from `spawn_interval_table[difficulty]`. | Custom | IMPL | test_lander_spawn.c |
 | R12.2  | Spawn interval: LOW=96, MED=64, HIGH=32 frames. | Ed-specified (data-driven) | IMPL | test_difficulty_init.c |
-| R12.3  | Wave 1 begins on splash dismiss; first spawn fires after one full interval. | Inferred | IMPL | MISSING |
+| R12.3  | Wave 1 begins on splash dismiss; first spawn fires after one full interval. | Inferred | IMPL | test_score_events.c |
 | R12.4  | A spawn picks the first inactive entity slot scanning 0..63. | Custom | IMPL | test_lander_spawn.c |
 | R12.5  | New spawn position: world_x = (`spawn_pos_idx` * 32 + 16) mod 256, y = 10. `spawn_pos_idx` increments after each successful spawn. | Custom (Defenduino-equivalent) | IMPL | test_lander_spawn.c |
 | R12.6  | Spawn type: Pod first if `wave_pods_to_spawn > 0` (decrementing the counter); else Lander. While `planet_destroyed`, always Mutant. | Custom | IMPL | test_planet_destruction.c |
 | R12.7  | Wave size per (difficulty, wave) from `wave_sizes_table`. LOW: 5/7/8/9/10/12/12/12. MED: 10/13/14/16/18/20/20/20. HIGH: 15/20/20/.../20. | Custom | IMPL | test_waves.c |
-| R12.8  | Pod count per (difficulty, wave) from `wave_pod_count_table`. | Custom | IMPL | MISSING |
+| R12.8  | Pod count per (difficulty, wave) from `wave_pod_count_table`. | Custom | IMPL | test_score_events.c |
 | R12.9  | Wave ends when `wave_to_spawn == 0` AND `enemies_alive == 0`. | Inferred | IMPL | test_waves.c |
 | R12.10 | At wave-end, `wave_number++` (clamped at 8), `wave_to_spawn` and `wave_pods_to_spawn` re-derived, SFX_WAVE_CHANGE plays, kick-spawn fires. | Custom | IMPL | test_waves.c |
 | R12.11 | Wave-end re-spawns humanoids and clears `planet_destroyed`. | Williams | IMPL | test_planet_destruction.c |
@@ -222,8 +222,8 @@ References:
 | R15.2  | SFX_HIT plays on beam-enemy collision. | Williams | IMPL | test_audio.c |
 | R15.3  | SFX_DEATH plays on ship-enemy collision. | Williams | IMPL | test_audio.c |
 | R15.4  | SFX_GRAB plays when a Lander grabs a humanoid. | Williams | IMPL | test_abduction.c |
-| R15.5  | SFX_START plays on game start (splash → main_loop transition). | Custom | IMPL | MISSING |
-| R15.6  | SFX_WAVE_CHANGE plays on wave-end. | Custom | IMPL | MISSING |
+| R15.5  | SFX_START plays on game start (splash → main_loop transition). | Custom | IMPL | test_score_events.c |
+| R15.6  | SFX_WAVE_CHANGE plays on wave-end. | Custom | IMPL | test_score_events.c |
 | R15.7  | While SFX_START is playing, lower-priority FX (FIRE / HIT / GRAB) silently bow out so the start arpeggio finishes audibly. | Ed-specified (bug fix) | IMPL | test_audio_priority.c |
 | R15.8  | SFX_DEATH and SFX_WAVE_CHANGE bypass the SFX_START priority guard (game events override the jingle). | Custom | IMPL | test_audio_priority.c |
 
