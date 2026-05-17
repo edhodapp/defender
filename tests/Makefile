@@ -25,7 +25,7 @@ all: $(BUILD)/test_blinky $(BUILD)/test_ssd1306 $(BUILD)/test_oled $(BUILD)/test
      $(BUILD)/test_waves $(BUILD)/test_score_render $(BUILD)/test_lives \
      $(BUILD)/test_critter_kills $(BUILD)/test_planet_destruction \
      $(BUILD)/test_death_window $(BUILD)/test_difficulty_init \
-     $(BUILD)/test_audio_priority
+     $(BUILD)/test_audio_priority $(BUILD)/test_boot_init
 
 $(BUILD):
 	mkdir -p $@
@@ -108,6 +108,9 @@ $(BUILD)/test_difficulty_init: test_difficulty_init.c sim_helpers.c sim_helpers.
 
 $(BUILD)/test_audio_priority: test_audio_priority.c sim_helpers.c sim_helpers.h | $(BUILD)
 	$(CC) $(CFLAGS) test_audio_priority.c sim_helpers.c $(LDFLAGS) $(LIBS) -o $@
+
+$(BUILD)/test_boot_init: test_boot_init.c sim_helpers.c sim_helpers.h | $(BUILD)
+	$(CC) $(CFLAGS) test_boot_init.c sim_helpers.c $(LDFLAGS) $(LIBS) -o $@
 
 $(BUILD)/profile: profile.c sim_helpers.c sim_helpers.h | $(BUILD)
 	$(CC) $(CFLAGS) profile.c sim_helpers.c $(LDFLAGS) $(LIBS) -o $@
@@ -222,6 +225,8 @@ test: all
 	$(BUILD)/test_difficulty_init ../build/defender.elf || fail=1; \
 	echo ">>> $(BUILD)/test_audio_priority"; \
 	$(BUILD)/test_audio_priority ../build/defender.elf || fail=1; \
+	echo ">>> $(BUILD)/test_boot_init"; \
+	$(BUILD)/test_boot_init ../build/defender.elf || fail=1; \
 	if [ $$fail -ne 0 ]; then echo "TESTS FAILED"; exit 1; fi; \
 	echo "ALL TESTS PASSED"
 

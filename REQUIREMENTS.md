@@ -245,9 +245,9 @@ References:
 
 | ID     | Requirement | Source | Status | Test |
 |--------|-------------|--------|--------|------|
-| R17.1  | `_reset` entry zeroes SP to RAMEND and CLI before any other init (soft-reset path may land with IRQs enabled). | Ed-specified (bug, fixed) | IMPL | MISSING |
-| R17.2  | The 30-frame `boot_warp_frames` grace period suppresses slot-0 Lander AI so the boot Lander doesn't start mid-descent during SFX_START. | Ed-specified (UX) | IMPL | MISSING |
-| R17.3  | After GAME OVER → B-edge → `rjmp _reset`, the soft-reset magic byte forces the splash to show even with B still held. | Ed-specified (bug, fixed) | IMPL | MISSING |
+| R17.1  | `_reset` entry zeroes SP to RAMEND and CLI before any other init (soft-reset path may land with IRQs enabled). | Ed-specified (bug, fixed) | IMPL | STRUCTURAL (code inspection) |
+| R17.2  | The 30-frame `boot_warp_frames` grace period suppresses slot-0 Lander AI so the boot Lander doesn't start mid-descent during SFX_START. | Ed-specified (UX) | IMPL | test_boot_init.c |
+| R17.3  | After GAME OVER → B-edge → `rjmp _reset`, the soft-reset magic byte forces the splash to show even with B still held. | Ed-specified (bug, fixed) | IMPL | test_boot_init.c (magic lifecycle) + test_death_window.c (B-edge path) |
 
 ---
 
