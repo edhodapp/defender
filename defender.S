@@ -645,6 +645,9 @@ no_b_press:
     ; --- Ship vs. enemy collision (player death) ---
     rcall ship_collision_check
 
+    ; --- Ship vs. falling humanoid (catch bonus, R10.6) ---
+    rcall check_humanoid_catch
+
     ; --- Drain any deferred SFX queued from inner collision loops ---
     lds   r24, pending_sfx
     cpi   r24, 0
@@ -2507,6 +2510,88 @@ sc_next:
     breq  sc_loop_done                   ; 7-bit cond → nearby label
     rjmp  sc_loop                        ; rjmp's 12-bit range fits
 sc_loop_done:
+    ret
+
+; ============================================================================
+; check_humanoid_catch: ship-falling-humanoid catch (R10.6). If the
+; ship overlaps an active FALLING humanoid (TYPE_HUMANOID with byte 0
+; bit 0 set), deactivate the humanoid and award +500 points. Williams
+; also awarded +1000 for returning the humanoid to the ground; that
+; requires per-ship-humanoid-state which isn't yet modelled — for now
+; the catch alone fires.
+;
+; Skipped during the death/respawn window (any non-zero death_flash
+; or respawn_invuln) so the ghost ship's invuln frames don't auto-
+; catch stuff.
+;
+; Clobbers: r17, r18, r24, r25, r26, r27, Y.
+; ============================================================================
+check_humanoid_catch:
+    lds   r24, death_flash
+    cpi   r24, 0
+    brne  chc_skip
+    lds   r24, respawn_invuln
+    cpi   r24, 0
+    brne  chc_skip
+    ldi   r28, lo8(entities)
+    ldi   r29, hi8(entities)
+    ldi   r18, ENTITY_SLOTS
+    lds   r17, sprite_y                   ; ship y
+chc_loop:
+    ld    r25, Y
+    sbrs  r25, 7
+    rjmp  chc_next                        ; inactive
+    mov   r26, r25
+    swap  r26
+    andi  r26, 0x07
+    cpi   r26, TYPE_HUMANOID
+    brne  chc_next
+    sbrs  r25, 0
+    rjmp  chc_next                        ; grounded — not catchable
+    ; Falling humanoid. Check overlap with ship's 8×8 box at (60..67,
+    ; sprite_y..sprite_y+7). X overlap: screen_x in [53, 67].
+    ldd   r26, Y+1
+    lds   r27, scroll_offset
+    sub   r26, r27
+    sbrc  r26, 7
+    rjmp  chc_next                        ; off-screen left
+    cpi   r26, 53
+    brlo  chc_next
+    cpi   r26, 68
+    brsh  chc_next
+    ; Y overlap: |humanoid_y - sprite_y| <= 7
+    ldd   r24, Y+2
+    andi  r24, 0x3F
+    mov   r26, r24
+    sub   r26, r17
+    sbrs  r26, 7
+    rjmp  chc_check_y
+    neg   r26
+chc_check_y:
+    cpi   r26, 8
+    brsh  chc_next
+    ; CATCH — deactivate humanoid and award +500 pts (24-bit add via
+    ; the standard subi-with-two's-comp trick: -500 = 0xFFFE0C).
+    clr   r25
+    st    Y, r25
+    lds   r24, score_lo
+    lds   r25, score_mid
+    lds   r26, score_hi
+    subi  r24, 0x0C
+    sbci  r25, 0xFE
+    sbci  r26, 0xFF
+    sts   score_lo, r24
+    sts   score_mid, r25
+    sts   score_hi, r26
+    ; Could queue SFX_GRAB here for an audio cue — deferred until we
+    ; decide whether a separate "catch" sound is warranted.
+    ret
+chc_next:
+    adiw  r28, ENTITY_SIZE
+    dec   r18
+    breq  chc_skip
+    rjmp  chc_loop                        ; rjmp range — same pattern as sc_loop
+chc_skip:
     ret
 
 ; ============================================================================

@@ -159,7 +159,7 @@ References:
 | R10.3  | A falling humanoid has byte0 bit 0 set; descends 1 row per 4 frames until y=48; on landing, falling bit clears. | Williams (rescue catch) | IMPL | test_humanoids.c |
 | R10.4  | A falling humanoid that reaches y=48 becomes grounded again. | Inferred | IMPL | test_humanoids.c |
 | R10.5  | Beam hitting a humanoid kills it; no score change. | Williams (penalty −100 — DEVIATION, we don't penalize) | PART | test_freeing.c + test_score_events.c |
-| R10.6  | Catching a falling humanoid would award score in Williams (+500). Not implemented (we don't track ship-humanoid contact). | Williams | TODO | — |
+| R10.6  | Catching a falling humanoid awards +500 pts and deactivates it. Williams also awarded +1000 for returning the humanoid to the ground; that's deferred (would require per-ship-humanoid carry state). | Williams | PART | test_humanoid_catch.c |
 
 ---
 
@@ -300,7 +300,7 @@ Difficulty (0=LOW, 1=MED, 2=HIGH) currently varies these parameters:
 | Per-kill score | Lander 150 / Mutant 150 / Pod 1000 / Swarmer 150 / Bomber 250 / Baiter 200 | All 100 | Simpler; we may revisit |
 | Humanoid count | 10 | 8 | Screen width / entity-slot budget |
 | Humanoid kill penalty | −100 | 0 | Player-friendly |
-| Catch-falling-humanoid bonus | +500 (+1000 if grounded) | Not implemented | Ship-humanoid contact not tracked |
+| Catch-falling-humanoid bonus | +500 (+1000 if grounded) | +500 catch implemented; +1000 return-to-ground deferred | Per-ship-humanoid carry state not yet modelled |
 | Smart bombs at boot | 3 | 0 (FUTURE) | Not yet implemented |
 | Hyperspace | Random teleport button | Not present | Niche feature, low player value |
 
