@@ -122,9 +122,9 @@ References:
 |-------|-------------|--------|--------|------|
 | R7.1  | Pod horizontal drift: move 1 col toward ship's world_x every 8 frames. | Inferred | IMPL | critter_physics |
 | R7.2  | Pod has no vertical motion; stays at spawn y (default 10). | Inferred | IMPL | critter_physics |
-| R7.3  | Pod is lethal on contact with ship. | Williams | IMPL | MISSING |
-| R7.4  | Beam hitting a Pod spawns POD_SWARMER_COUNT (5) Swarmers at the Pod's position, then awards +100 pts for the Pod kill. | Williams (Pod splits into Swarmers) | IMPL | MISSING |
-| R7.5  | The 5 Swarmers get distinct initial directions (RNG-shuffled across 8 compass dirs) so they fan out visibly. | Williams (starburst spawn) | IMPL | MISSING |
+| R7.3  | Pod is lethal on contact with ship. | Williams | IMPL | test_critter_kills.c |
+| R7.4  | Beam hitting a Pod spawns POD_SWARMER_COUNT (5) Swarmers at the Pod's position, then awards +100 pts for the Pod kill. | Williams (Pod splits into Swarmers) | IMPL | test_critter_kills.c |
+| R7.5  | The 5 Swarmers get distinct initial directions (RNG-shuffled across 8 compass dirs) so they fan out visibly. | Williams (starburst spawn) | IMPL | test_critter_kills.c |
 
 ---
 
@@ -135,8 +135,8 @@ References:
 | R8.1  | Swarmer moves 1 px per frame in its current 3-bit compass direction (8 directions). | Custom — Williams Swarmers had jittery motion | IMPL | critter_physics |
 | R8.2  | Every 8 frames, an LFSR coin-flip decides whether to nudge direction ±1 step toward the ideal player bearing. | Custom (inertia + bias model) | IMPL | MISSING |
 | R8.3  | Nudge probability is per-difficulty: LOW=25%, MED=50%, HIGH=75% (Williams-faithful aggression at HIGH). | Ed-specified | IMPL | MISSING |
-| R8.4  | Swarmers are lethal on contact with ship. | Williams | IMPL | MISSING |
-| R8.5  | Beam hitting a Swarmer → Swarmer dies, +100 pts. | Williams (150 — DEVIATION) | IMPL | MISSING |
+| R8.4  | Swarmers are lethal on contact with ship. | Williams | IMPL | test_critter_kills.c |
+| R8.5  | Beam hitting a Swarmer → Swarmer dies, +100 pts. | Williams (150 — DEVIATION) | IMPL | test_critter_kills.c |
 | R8.6  | Swarmer trajectories must be reproducible given a fixed RNG seed. | Tooling requirement | IMPL | critter_physics |
 
 ---
