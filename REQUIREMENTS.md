@@ -29,9 +29,9 @@ References:
 | ID    | Requirement | Source | Status | Test |
 |-------|-------------|--------|--------|------|
 | R1.1  | On cold boot the splash screen renders "DEFENDER" + difficulty rows (LOW / MED / HIGH / RESET). | Inferred | IMPL | MISSING (visual) |
-| R1.2  | Title-screen cursor moves on UP / DOWN button edge (not level). | Inferred | IMPL | MISSING |
-| R1.3  | B-press edge on a difficulty row stores `difficulty` and exits the splash. | Inferred | IMPL | MISSING |
-| R1.4  | Holding B on the RESET row for ≥60 frames (1 s @ 60 Hz) zeroes the EEPROM high-score table. | Ed-specified | IMPL | MISSING |
+| R1.2  | Title-screen cursor moves on UP / DOWN button edge (not level). | Inferred | IMPL | test_title_input.c |
+| R1.3  | B-press edge on a difficulty row stores `difficulty` and exits the splash. | Inferred | IMPL | test_title_input.c |
+| R1.4  | Holding B on the RESET row for ≥60 frames (1 s @ 60 Hz) zeroes the EEPROM high-score table. | Ed-specified | IMPL | test_title_input.c |
 | R1.5  | The held-B that exits the splash MUST NOT immediately trigger SFX_FIRE in main_loop. | Ed-specified (bug reported) | IMPL | MISSING (`audio_play` priority) |
 | R1.6  | After GAME OVER → B-press, the splash re-appears (no instant new game). | Ed-specified (bug reported) | IMPL | MISSING |
 | R1.7  | High scores per difficulty render next to LOW / MED / HIGH rows. | Williams (HS tied to difficulty unique) | IMPL | MISSING (visual) |
@@ -237,7 +237,7 @@ References:
 | R16.2  | EEPROM bytes 1..9 hold three 24-bit high scores: LOW, MED, HIGH. | Custom | IMPL | test_eeprom.c |
 | R16.3  | On cold boot with magic mismatch (uninitialized 0xFF or unrelated firmware), the table is reset to zeros. | Custom | IMPL | test_eeprom.c |
 | R16.4  | High score writes only on GAME OVER transition and only if the just-finished run beat the stored value. | Ed-specified | IMPL | test_eeprom.c |
-| R16.5  | RESET row + hold-B-60-frames wipes the table (magic preserved, scores zeroed). | Ed-specified | IMPL | MISSING (title-input flow) |
+| R16.5  | RESET row + hold-B-60-frames wipes the table (magic preserved, scores zeroed). | Ed-specified | IMPL | test_title_input.c |
 
 ---
 

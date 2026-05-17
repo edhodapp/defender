@@ -27,7 +27,7 @@ all: $(BUILD)/test_blinky $(BUILD)/test_ssd1306 $(BUILD)/test_oled $(BUILD)/test
      $(BUILD)/test_death_window $(BUILD)/test_difficulty_init \
      $(BUILD)/test_audio_priority $(BUILD)/test_boot_init \
      $(BUILD)/test_score_events $(BUILD)/test_eeprom \
-     $(BUILD)/test_humanoid_catch
+     $(BUILD)/test_humanoid_catch $(BUILD)/test_title_input
 
 $(BUILD):
 	mkdir -p $@
@@ -122,6 +122,9 @@ $(BUILD)/test_eeprom: test_eeprom.c sim_helpers.c sim_helpers.h | $(BUILD)
 
 $(BUILD)/test_humanoid_catch: test_humanoid_catch.c sim_helpers.c sim_helpers.h | $(BUILD)
 	$(CC) $(CFLAGS) test_humanoid_catch.c sim_helpers.c $(LDFLAGS) $(LIBS) -o $@
+
+$(BUILD)/test_title_input: test_title_input.c sim_helpers.c sim_helpers.h | $(BUILD)
+	$(CC) $(CFLAGS) test_title_input.c sim_helpers.c $(LDFLAGS) $(LIBS) -o $@
 
 $(BUILD)/profile: profile.c sim_helpers.c sim_helpers.h | $(BUILD)
 	$(CC) $(CFLAGS) profile.c sim_helpers.c $(LDFLAGS) $(LIBS) -o $@
@@ -244,6 +247,8 @@ test: all
 	$(BUILD)/test_eeprom ../build/defender.elf || fail=1; \
 	echo ">>> $(BUILD)/test_humanoid_catch"; \
 	$(BUILD)/test_humanoid_catch ../build/defender.elf || fail=1; \
+	echo ">>> $(BUILD)/test_title_input"; \
+	$(BUILD)/test_title_input ../build/defender.elf || fail=1; \
 	if [ $$fail -ne 0 ]; then echo "TESTS FAILED"; exit 1; fi; \
 	echo "ALL TESTS PASSED"
 
