@@ -76,9 +76,9 @@ References:
 | R4.3  | A ship-enemy overlap with `lives == 0` sets `game_state = 1` (GAME OVER). | Williams | IMPL | test_lives.c |
 | R4.4  | Death animation: 30-frame explosion (8 fragments fly out from death position), then 60-frame respawn-blink invuln. | Williams (ship-fragment explosion + invuln) | PART | test_lives.c (state pinned; visual not) |
 | R4.5  | During the 90-frame death window, the ship is non-collidable. | Williams | IMPL | test_lives.c |
-| R4.6  | During the 30-frame explosion sub-phase, input is suppressed (player can't move/fire). | Inferred | IMPL | MISSING |
-| R4.7  | After GAME OVER, B-press (edge-detected) soft-resets to splash. | Ed-specified | IMPL | MISSING |
-| R4.8  | A held-B carried over from the killing shot MUST NOT instantly soft-reset; edge detection required. | Ed-specified (bug) | IMPL | MISSING |
+| R4.6  | During the 30-frame explosion sub-phase, input is suppressed (player can't move/fire). | Inferred | IMPL | test_death_window.c |
+| R4.7  | After GAME OVER, B-press (edge-detected) soft-resets to splash. | Ed-specified | IMPL | test_death_window.c |
+| R4.8  | A held-B carried over from the killing shot MUST NOT instantly soft-reset; edge detection required. | Ed-specified (bug) | IMPL | test_death_window.c |
 | R4.9  | High score updates only on the GAME OVER transition (no per-frame EEPROM writes). | Ed-specified (EEPROM wear) | IMPL | MISSING |
 | R4.10 | `lives` saturates at 255 — bonus-ship awards must not wrap to 0. | Ed-specified (bug, fixed) | IMPL | test_lives.c |
 

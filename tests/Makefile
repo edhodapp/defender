@@ -23,7 +23,8 @@ all: $(BUILD)/test_blinky $(BUILD)/test_ssd1306 $(BUILD)/test_oled $(BUILD)/test
      $(BUILD)/test_audio $(BUILD)/test_humanoids $(BUILD)/test_abduction \
      $(BUILD)/test_freeing $(BUILD)/test_seek $(BUILD)/test_mutants \
      $(BUILD)/test_waves $(BUILD)/test_score_render $(BUILD)/test_lives \
-     $(BUILD)/test_critter_kills $(BUILD)/test_planet_destruction
+     $(BUILD)/test_critter_kills $(BUILD)/test_planet_destruction \
+     $(BUILD)/test_death_window
 
 $(BUILD):
 	mkdir -p $@
@@ -97,6 +98,9 @@ $(BUILD)/test_critter_kills: test_critter_kills.c sim_helpers.c sim_helpers.h | 
 
 $(BUILD)/test_planet_destruction: test_planet_destruction.c sim_helpers.c sim_helpers.h | $(BUILD)
 	$(CC) $(CFLAGS) test_planet_destruction.c sim_helpers.c $(LDFLAGS) $(LIBS) -o $@
+
+$(BUILD)/test_death_window: test_death_window.c sim_helpers.c sim_helpers.h | $(BUILD)
+	$(CC) $(CFLAGS) test_death_window.c sim_helpers.c $(LDFLAGS) $(LIBS) -o $@
 
 $(BUILD)/profile: profile.c sim_helpers.c sim_helpers.h | $(BUILD)
 	$(CC) $(CFLAGS) profile.c sim_helpers.c $(LDFLAGS) $(LIBS) -o $@
@@ -205,6 +209,8 @@ test: all
 	$(BUILD)/test_critter_kills ../build/defender.elf || fail=1; \
 	echo ">>> $(BUILD)/test_planet_destruction"; \
 	$(BUILD)/test_planet_destruction ../build/defender.elf || fail=1; \
+	echo ">>> $(BUILD)/test_death_window"; \
+	$(BUILD)/test_death_window ../build/defender.elf || fail=1; \
 	if [ $$fail -ne 0 ]; then echo "TESTS FAILED"; exit 1; fi; \
 	echo "ALL TESTS PASSED"
 
