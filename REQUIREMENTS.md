@@ -79,7 +79,7 @@ References:
 | R4.6  | During the 30-frame explosion sub-phase, input is suppressed (player can't move/fire). | Inferred | IMPL | test_death_window.c |
 | R4.7  | After GAME OVER, B-press (edge-detected) soft-resets to splash. | Ed-specified | IMPL | test_death_window.c |
 | R4.8  | A held-B carried over from the killing shot MUST NOT instantly soft-reset; edge detection required. | Ed-specified (bug) | IMPL | test_death_window.c |
-| R4.9  | High score updates only on the GAME OVER transition (no per-frame EEPROM writes). | Ed-specified (EEPROM wear) | IMPL | MISSING |
+| R4.9  | High score updates only on the GAME OVER transition (no per-frame EEPROM writes). | Ed-specified (EEPROM wear) | IMPL | test_eeprom.c |
 | R4.10 | `lives` saturates at 255 — bonus-ship awards must not wrap to 0. | Ed-specified (bug, fixed) | IMPL | test_lives.c |
 
 ---
@@ -233,11 +233,11 @@ References:
 
 | ID     | Requirement | Source | Status | Test |
 |--------|-------------|--------|--------|------|
-| R16.1  | EEPROM byte 0 is magic 0xDF marking initialized state. | Custom | IMPL | MISSING (hardware) |
-| R16.2  | EEPROM bytes 1..9 hold three 24-bit high scores: LOW, MED, HIGH. | Custom | IMPL | MISSING (hardware) |
-| R16.3  | On cold boot with magic mismatch (uninitialized 0xFF or unrelated firmware), the table is reset to zeros. | Custom | IMPL | MISSING (hardware) |
-| R16.4  | High score writes only on GAME OVER transition and only if the just-finished run beat the stored value. | Ed-specified | IMPL | MISSING (hardware) |
-| R16.5  | RESET row + hold-B-60-frames wipes the table (magic preserved, scores zeroed). | Ed-specified | IMPL | MISSING |
+| R16.1  | EEPROM byte 0 is magic 0xDF marking initialized state. | Custom | IMPL | test_eeprom.c |
+| R16.2  | EEPROM bytes 1..9 hold three 24-bit high scores: LOW, MED, HIGH. | Custom | IMPL | test_eeprom.c |
+| R16.3  | On cold boot with magic mismatch (uninitialized 0xFF or unrelated firmware), the table is reset to zeros. | Custom | IMPL | test_eeprom.c |
+| R16.4  | High score writes only on GAME OVER transition and only if the just-finished run beat the stored value. | Ed-specified | IMPL | test_eeprom.c |
+| R16.5  | RESET row + hold-B-60-frames wipes the table (magic preserved, scores zeroed). | Ed-specified | IMPL | MISSING (title-input flow) |
 
 ---
 
