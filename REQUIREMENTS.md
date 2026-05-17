@@ -180,7 +180,7 @@ References:
 | ID     | Requirement | Source | Status | Test |
 |--------|-------------|--------|--------|------|
 | R12.1  | `spawn_countdown` decrements once per frame; on 0, fires `try_spawn_enemy` and reloads from `spawn_interval_table[difficulty]`. | Custom | IMPL | test_lander_spawn.c |
-| R12.2  | Spawn interval: LOW=96, MED=64, HIGH=32 frames. | Ed-specified (data-driven) | IMPL | MISSING |
+| R12.2  | Spawn interval: LOW=96, MED=64, HIGH=32 frames. | Ed-specified (data-driven) | IMPL | test_difficulty_init.c |
 | R12.3  | Wave 1 begins on splash dismiss; first spawn fires after one full interval. | Inferred | IMPL | MISSING |
 | R12.4  | A spawn picks the first inactive entity slot scanning 0..63. | Custom | IMPL | test_lander_spawn.c |
 | R12.5  | New spawn position: world_x = (`spawn_pos_idx` * 32 + 16) mod 256, y = 10. `spawn_pos_idx` increments after each successful spawn. | Custom (Defenduino-equivalent) | IMPL | test_lander_spawn.c |
@@ -210,7 +210,7 @@ References:
 |--------|-------------|--------|--------|------|
 | R14.1  | Bonus ship awarded when score crosses `next_bonus` threshold (LOW=3000, MED=6000, HIGH=10000). | Custom (Williams: every 10000 — HIGH is faithful) | IMPL | test_lives.c |
 | R14.2  | On award, `lives++` (capped at 255) and `next_bonus += per-difficulty increment`. | Custom | IMPL | test_lives.c |
-| R14.3  | `next_bonus` is initialized from the per-difficulty table AFTER the splash sets `difficulty` (not from the MED default). | Ed-specified (bug, fixed) | IMPL | MISSING |
+| R14.3  | `next_bonus` is initialized from the per-difficulty table AFTER the splash sets `difficulty` (not from the MED default). | Ed-specified (bug, fixed) | IMPL | test_difficulty_init.c |
 
 ---
 
@@ -224,8 +224,8 @@ References:
 | R15.4  | SFX_GRAB plays when a Lander grabs a humanoid. | Williams | IMPL | test_abduction.c |
 | R15.5  | SFX_START plays on game start (splash → main_loop transition). | Custom | IMPL | MISSING |
 | R15.6  | SFX_WAVE_CHANGE plays on wave-end. | Custom | IMPL | MISSING |
-| R15.7  | While SFX_START is playing, lower-priority FX (FIRE / HIT / GRAB) silently bow out so the start arpeggio finishes audibly. | Ed-specified (bug fix) | IMPL | MISSING |
-| R15.8  | SFX_DEATH and SFX_WAVE_CHANGE bypass the SFX_START priority guard (game events override the jingle). | Custom | IMPL | MISSING |
+| R15.7  | While SFX_START is playing, lower-priority FX (FIRE / HIT / GRAB) silently bow out so the start arpeggio finishes audibly. | Ed-specified (bug fix) | IMPL | test_audio_priority.c |
+| R15.8  | SFX_DEATH and SFX_WAVE_CHANGE bypass the SFX_START priority guard (game events override the jingle). | Custom | IMPL | test_audio_priority.c |
 
 ---
 
