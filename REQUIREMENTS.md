@@ -167,11 +167,11 @@ References:
 
 | ID     | Requirement | Source | Status | Test |
 |--------|-------------|--------|--------|------|
-| R11.1  | When no humanoids and no carrying Landers remain alive, `planet_destroyed = 1`. | Williams | IMPL | MISSING |
-| R11.2  | On destruction trip, all non-carrying Landers in play transform to Mutants in place. | Williams | IMPL | MISSING |
-| R11.3  | While `planet_destroyed`, the spawner installs only Mutants regardless of wave_pods_to_spawn. | Williams | IMPL | MISSING |
-| R11.4  | At wave-end, 8 humanoids respawn and `planet_destroyed` clears. | Williams (new planet) | IMPL | MISSING |
-| R11.5  | The destruction check is event-driven (fires at humanoid-removal sites: chh_kill, chh_drop_cargo, ul_become_mutant). | Custom (perf — per-frame scan unnecessary) | IMPL | MISSING |
+| R11.1  | When no humanoids and no carrying Landers remain alive, `planet_destroyed = 1`. | Williams | IMPL | test_planet_destruction.c |
+| R11.2  | On destruction trip, all non-carrying Landers in play transform to Mutants in place. | Williams | IMPL | test_planet_destruction.c |
+| R11.3  | While `planet_destroyed`, the spawner installs only Mutants regardless of wave_pods_to_spawn. | Williams | IMPL | test_planet_destruction.c |
+| R11.4  | At wave-end, 8 humanoids respawn and `planet_destroyed` clears. | Williams (new planet) | IMPL | test_planet_destruction.c |
+| R11.5  | The destruction check is event-driven (fires at humanoid-removal sites: chh_kill, chh_drop_cargo, ul_become_mutant). | Custom (perf — per-frame scan unnecessary) | IMPL | test_planet_destruction.c |
 
 ---
 
@@ -184,12 +184,12 @@ References:
 | R12.3  | Wave 1 begins on splash dismiss; first spawn fires after one full interval. | Inferred | IMPL | MISSING |
 | R12.4  | A spawn picks the first inactive entity slot scanning 0..63. | Custom | IMPL | test_lander_spawn.c |
 | R12.5  | New spawn position: world_x = (`spawn_pos_idx` * 32 + 16) mod 256, y = 10. `spawn_pos_idx` increments after each successful spawn. | Custom (Defenduino-equivalent) | IMPL | test_lander_spawn.c |
-| R12.6  | Spawn type: Pod first if `wave_pods_to_spawn > 0` (decrementing the counter); else Lander. While `planet_destroyed`, always Mutant. | Custom | IMPL | MISSING |
+| R12.6  | Spawn type: Pod first if `wave_pods_to_spawn > 0` (decrementing the counter); else Lander. While `planet_destroyed`, always Mutant. | Custom | IMPL | test_planet_destruction.c |
 | R12.7  | Wave size per (difficulty, wave) from `wave_sizes_table`. LOW: 5/7/8/9/10/12/12/12. MED: 10/13/14/16/18/20/20/20. HIGH: 15/20/20/.../20. | Custom | IMPL | test_waves.c |
 | R12.8  | Pod count per (difficulty, wave) from `wave_pod_count_table`. | Custom | IMPL | MISSING |
 | R12.9  | Wave ends when `wave_to_spawn == 0` AND `enemies_alive == 0`. | Inferred | IMPL | test_waves.c |
 | R12.10 | At wave-end, `wave_number++` (clamped at 8), `wave_to_spawn` and `wave_pods_to_spawn` re-derived, SFX_WAVE_CHANGE plays, kick-spawn fires. | Custom | IMPL | test_waves.c |
-| R12.11 | Wave-end re-spawns humanoids and clears `planet_destroyed`. | Williams | IMPL | MISSING |
+| R12.11 | Wave-end re-spawns humanoids and clears `planet_destroyed`. | Williams | IMPL | test_planet_destruction.c |
 
 ---
 

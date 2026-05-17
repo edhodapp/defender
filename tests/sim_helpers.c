@@ -87,6 +87,7 @@ sim_t *sim_boot_no_warmup(const char *elf_path) {
     s->sym_pending_sfx    = sim_lookup(s, "pending_sfx");
     s->sym_wave_number    = sim_lookup(s, "wave_number");
     s->sym_wave_to_spawn  = sim_lookup(s, "wave_to_spawn");
+    s->sym_wave_pods_to_spawn = sim_lookup(s, "wave_pods_to_spawn");
     s->sym_enemies_alive  = sim_lookup(s, "enemies_alive");
     s->sym_difficulty     = sim_lookup(s, "difficulty");
     s->sym_skip_title_flag = sim_lookup(s, "skip_title_flag");
