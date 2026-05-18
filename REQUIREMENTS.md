@@ -74,9 +74,9 @@ References:
 | R4.1  | Game starts with `lives = 3` reserve ships (HUD shows 3); active ship is implicit. Total = 4 chances. | Williams convention | IMPL | test_lives.c |
 | R4.2  | A ship-enemy overlap with `lives > 0` decrements `lives` and respawns the ship at default position. | Williams | IMPL | test_lives.c |
 | R4.3  | A ship-enemy overlap with `lives == 0` sets `game_state = 1` (GAME OVER). | Williams | IMPL | test_lives.c |
-| R4.4  | Death animation: 30-frame explosion (8 fragments fly out from death position), then 60-frame respawn-blink invuln. | Williams (ship-fragment explosion + invuln) | PART | test_lives.c (state pinned; visual not) |
-| R4.5  | During the 90-frame death window, the ship is non-collidable. | Williams | IMPL | test_lives.c |
-| R4.6  | During the 30-frame explosion sub-phase, input is suppressed (player can't move/fire). | Inferred | IMPL | test_death_window.c |
+| R4.4  | Death sequence is 180 frames total (3.0 s @ 60 Hz): a 30-frame explosion phase (respawn_invuln in [151, 180]; no input, no collision, 8 fragments rendered from death_y), then a 150-frame respawn-blink phase (respawn_invuln in [1, 150]; input enabled, ship blinks every 8 frames, still no collision). At respawn_invuln==0, normal play resumes. | Williams arcade pacing | TODO | test_lives.c (will need update for new constants) |
+| R4.5  | During the entire 180-frame death window, the ship is non-collidable. | Williams | TODO | test_lives.c (constant update) |
+| R4.6  | During the 30-frame explosion sub-phase (respawn_invuln > 150), input is suppressed. During the 150-frame blink sub-phase, input is enabled. | Inferred | TODO | test_death_window.c (constant update) |
 | R4.7  | After GAME OVER, B-press (edge-detected) soft-resets to splash. | Ed-specified | IMPL | test_death_window.c |
 | R4.8  | A held-B carried over from the killing shot MUST NOT instantly soft-reset; edge detection required. | Ed-specified (bug) | IMPL | test_death_window.c |
 | R4.9  | High score updates only on the GAME OVER transition (no per-frame EEPROM writes). | Ed-specified (EEPROM wear) | IMPL | test_eeprom.c |
@@ -159,7 +159,9 @@ References:
 | R10.3  | A falling humanoid has byte0 bit 0 set; descends 1 row per 4 frames until y=48; on landing, falling bit clears. | Williams (rescue catch) | IMPL | test_humanoids.c |
 | R10.4  | A falling humanoid that reaches y=48 becomes grounded again. | Inferred | IMPL | test_humanoids.c |
 | R10.5  | Beam hitting a humanoid kills it; no score change. | Williams (penalty −100 — DEVIATION, we don't penalize) | PART | test_freeing.c + test_score_events.c |
-| R10.6  | Catching a falling humanoid awards +500 pts and deactivates it. Williams also awarded +1000 for returning the humanoid to the ground; that's deferred (would require per-ship-humanoid carry state). | Williams | PART | test_humanoid_catch.c |
+| R10.6  | Catching a falling humanoid: on overlap, deactivate humanoid slot, award +500 pts, set `carried_humanoid` flag in BSS. Ship can carry at most one humanoid at a time; subsequent catches while carrying are ignored. | Williams | TODO | test_humanoid_catch.c (will need carry-state cases) |
+| R10.7  | Returning a carried humanoid: while `carried_humanoid` is set, if the ship's sprite_y >= 40 (ground altitude band), the humanoid is released — `carried_humanoid` clears, a new TYPE_HUMANOID is spawned (grounded, byte 0 bit 0 == 0) at world_x = scroll_offset + 60 (ship's current world_x), y = 48, and +1000 pts is awarded. | Williams | TODO | MISSING |
+| R10.8  | If the ship dies while carrying a humanoid, the carry is discarded silently (no penalty, no spawn). The carried humanoid is considered "lost with the ship". | Inferred (simplification) | TODO | MISSING |
 
 ---
 
@@ -168,7 +170,7 @@ References:
 | ID     | Requirement | Source | Status | Test |
 |--------|-------------|--------|--------|------|
 | R11.1  | When no humanoids and no carrying Landers remain alive, `planet_destroyed = 1`. | Williams | IMPL | test_planet_destruction.c |
-| R11.2  | On destruction trip, all non-carrying Landers in play transform to Mutants in place. | Williams | IMPL | test_planet_destruction.c |
+| R11.2  | On destruction trip, every non-carrying enemy (TYPE_LANDER without carry, TYPE_POD, TYPE_SWARMER, future TYPE_BOMBER/TYPE_BAITER) transforms to TYPE_MUTANT in place — world_x and y preserved, state bits cleared. Carrying Landers are skipped so they finish their abduction trip and convert via the existing y==9 → ul_become_mutant path. Williams: skies are all-Mutant after planet loss. | Williams | TODO | test_planet_destruction.c (will need extension for Pod/Swarmer cases) |
 | R11.3  | While `planet_destroyed`, the spawner installs only Mutants regardless of wave_pods_to_spawn. | Williams | IMPL | test_planet_destruction.c |
 | R11.4  | At wave-end, 8 humanoids respawn and `planet_destroyed` clears. | Williams (new planet) | IMPL | test_planet_destruction.c |
 | R11.5  | The destruction check is event-driven (fires at humanoid-removal sites: chh_kill, chh_drop_cargo, ul_become_mutant). | Custom (perf — per-frame scan unnecessary) | IMPL | test_planet_destruction.c |
@@ -198,8 +200,8 @@ References:
 | ID     | Requirement | Source | Status | Test |
 |--------|-------------|--------|--------|------|
 | R13.1  | Score is 24-bit unsigned, stored as `score_lo / score_mid / score_hi`. | Inferred | IMPL | test_score_render.c |
-| R13.2  | Killing a Lander, Mutant, Pod, or Swarmer awards 100 points. | Custom (Williams: 150/150/1000/150 — DEVIATION) | IMPL | test_lives.c |
-| R13.3  | Killing a humanoid awards 0 points (Williams penalized −100; we don't). | Williams — DEVIATION | PART | MISSING |
+| R13.2  | Per-kill scoring (Williams-faithful): Lander +150, Mutant +150, Pod +1000, Swarmer +150. Bomber +250 / Baiter +200 land when those enemies are implemented (FUTURE). | Williams | TODO | test_critter_kills.c + test_score_events.c (will need value updates) |
+| R13.3  | Killing a humanoid awards −100 points (Williams penalty). Score is unsigned and clamped at 0 — it cannot go negative; any decrement that would underflow leaves score at 0. | Williams | TODO | test_score_events.c (will need new case) |
 | R13.4  | Score increments are atomic 24-bit adds; no overflow risk in a single session (max ~16M, 99999 visible cap). | Inferred | IMPL | test_score_render.c |
 
 ---
@@ -297,10 +299,11 @@ Difficulty (0=LOW, 1=MED, 2=HIGH) currently varies these parameters:
 
 | Deviation | Williams | This port | Reason |
 |-----------|----------|-----------|--------|
-| Per-kill score | Lander 150 / Mutant 150 / Pod 1000 / Swarmer 150 / Bomber 250 / Baiter 200 | All 100 | Simpler; we may revisit |
+| Per-kill score | Lander 150 / Mutant 150 / Pod 1000 / Swarmer 150 / Bomber 250 / Baiter 200 | Same (Bomber/Baiter pending implementation) | Williams-faithful (refined 2026-05-18) |
 | Humanoid count | 10 | 8 | Screen width / entity-slot budget |
-| Humanoid kill penalty | −100 | 0 | Player-friendly |
-| Catch-falling-humanoid bonus | +500 (+1000 if grounded) | +500 catch implemented; +1000 return-to-ground deferred | Per-ship-humanoid carry state not yet modelled |
+| Humanoid kill penalty | −100 | −100, clamped at 0 (score can't go negative) | Williams-faithful (refined 2026-05-18) |
+| Catch-falling-humanoid bonus | +500 (+1000 if returned to ground) | +500 catch + +1000 return-to-ground both implemented | Williams-faithful (refined 2026-05-18) |
+| Death/respawn invuln | ~3 s (180 frames @ 60 Hz) | 180 frames = 30 explosion + 150 blink | Williams-faithful (refined 2026-05-18) |
 | Smart bombs at boot | 3 | 0 (FUTURE) | Not yet implemented |
 | Hyperspace | Random teleport button | Not present | Niche feature, low player value |
 
